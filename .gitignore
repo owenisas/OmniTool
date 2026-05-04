@@ -1,0 +1,44 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# next.js
+.next/
+.next-tauri/
+out/
+
+# Tauri desktop shell (generated redirect to hosted web app)
+apps/desktop/app-shell/index.html
+
+# production
+build
+dist
+
+# env files
+.env
+.env.local
+.env.*.local
+
+# debug
+npm-debug.log*
+pnpm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# turbo
+.turbo
+
+# prisma
+packages/database/src/generated/
+
+# tauri
+apps/desktop/src-tauri/target/
+
+# misc
+*.tsbuildinfo
+coverage/

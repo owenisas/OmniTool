@@ -1,0 +1,85 @@
+# PowerSync sync rules for OmniTool (PostgreSQL source).
+# Deploy to your PowerSync Service (same DB as DATABASE_URL).
+#
+# JWT: HS256 (POWERSYNC_TOKEN_SECRET); `sub` = user id; `aud` = POWERSYNC_URL.
+# Claim: active_team_id (optional string) for future narrowing.
+#
+# M2M join tables (_NoteTags, …) are omitted (composite PK). Add explicit join models to sync links.
+
+bucket_definitions:
+  omnitool_user:
+    parameters: |
+      SELECT
+        request.user_id() AS user_id,
+        NULLIF(request.jwt() ->> 'active_team_id', '') AS active_team_id
+    data:
+      - |-
+        SELECT id, email, name, "avatarUrl", role, "githubUserId", "githubLogin",
+               "createdAt", "updatedAt", "emailVerified"
+        FROM users
+        WHERE id = bucket.user_id
+
+      - |-
+        SELECT t.*
+        FROM teams t
+        INNER JOIN team_members tm ON tm."teamId" = t.id AND tm."userId" = bucket.user_id
+
+      - |-
+        SELECT tm.*
+        FROM team_members tm
+        WHERE tm."teamId" IN (
+          SELECT "teamId" FROM team_members WHERE "userId" = bucket.user_id
+        )
+
+      - |-
+        SELECT p.*
+        FROM projects p
+        INNER JOIN team_members tm ON tm."teamId" = p."teamId" AND tm."userId" = bucket.user_id
+
+      - |-
+        SELECT ta.*
+        FROM tasks ta
+        INNER JOIN projects p ON p.id = ta."projectId"
+        INNER JOIN team_members tm ON tm."teamId" = p."teamId" AND tm."userId" = bucket.user_id
+
+      - |-
+        SELECT i.*
+        FROM issues i
+        INNER JOIN projects p ON p.id = i."projectId"
+        INNER JOIN team_members tm ON tm."teamId" = p."teamId" AND tm."userId" = bucket.user_id
+
+      - |-
+        SELECT * FROM notes WHERE "authorId" = bucket.user_id
+
+      - |-
+        SELECT * FROM tags
+
+      - |-
+        SELECT * FROM labels
+
+      - |-
+        SELECT * FROM time_entries WHERE "userId" = bucket.user_id
+
+      - |-
+        SELECT pm.*
+        FROM performance_metrics pm
+        INNER JOIN projects p ON p.id = pm."projectId"
+        INNER JOIN team_members tm ON tm."teamId" = p."teamId" AND tm."userId" = bucket.user_id
+
+      - |-
+        SELECT c.*
+        FROM comments c
+        LEFT JOIN tasks t ON t.id = c."taskId"
+        LEFT JOIN issues i ON i.id = c."issueId"
+        LEFT JOIN projects pt ON pt.id = t."projectId"
+        LEFT JOIN projects pi ON pi.id = i."projectId"
+        WHERE
+          (c."taskId" IS NOT NULL AND EXISTS (
+            SELECT 1 FROM team_members tm
+            WHERE tm."teamId" = pt."teamId" AND tm."userId" = bucket.user_id
+          ))
+          OR
+          (c."issueId" IS NOT NULL AND EXISTS (
+            SELECT 1 FROM team_members tm
+            WHERE tm."teamId" = pi."teamId" AND tm."userId" = bucket.user_id
+          ))

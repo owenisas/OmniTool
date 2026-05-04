@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="OmniTool Apple touch icon">
+  <rect width="180" height="180" rx="40" fill="#0f172a"/>
+  <rect x="49" y="38" width="82" height="104" rx="14" fill="#f8fafc"/>
+  <path d="M66 63h48M66 90h48M66 117h28" stroke="#0f172a" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="128" cy="130" r="23" fill="#38bdf8"/>
+  <path d="M117 130h22M128 119v22" stroke="#0f172a" stroke-width="8" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,366 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+// ─── USERS & AUTH ───────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  passwordHash  String?
+  avatarUrl     String?
+  role          String   @default("MEMBER")
+  githubUserId  Int?
+  githubLogin   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  emailVerified DateTime?
+  accounts      Account[]
+  sessions      Session[]
+
+  teamMembers       TeamMember[]
+  assignedTasks     Task[]            @relation("TaskAssignee")
+  createdTasks      Task[]            @relation("TaskCreator")
+  assignedIssues    Issue[]           @relation("IssueAssignee")
+  reportedIssues    Issue[]           @relation("IssueReporter")
+  notes             Note[]
+  timeEntries       TimeEntry[]
+  aiConversations   AIConversation[]
+  comments          Comment[]
+  connectedAccounts ConnectedAccount[]
+  githubImports     GitHubImportLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── TEAMS ──────────────────────────────────────────────────
+
+model Team {
+  id               String    @id @default(cuid())
+  name             String
+  slug             String    @unique
+  description      String?
+  githubOrgId      Int?
+  githubOrgLogin   String?
+  githubImportedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  members  TeamMember[]
+  projects Project[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  userId   String
+  teamId   String
+  role     String   @default("MEMBER")
+  joinedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+  @@map("team_members")
+}
+
+// ─── PROJECTS & TASKS ───────────────────────────────────────
+
+model Project {
+  id                 String    @id @default(cuid())
+  name               String
+  slug               String    @unique
+  description        String?
+  status             String    @default("ACTIVE")
+  teamId             String
+  githubRepoId       Int?
+  githubRepoFullName String?
+  githubImportedAt   DateTime?
+  startDate          DateTime?
+  targetDate         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  team    Team              @relation(fields: [teamId], references: [id])
+  tasks   Task[]
+  issues  Issue[]
+  metrics PerformanceMetric[]
+
+  @@map("projects")
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  status      String    @default("TODO")
+  priority    String    @default("MEDIUM")
+  storyPoints Int?
+  projectId   String
+  assigneeId  String?
+  creatorId   String
+  parentId    String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee    User?       @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  creator     User        @relation("TaskCreator", fields: [creatorId], references: [id])
+  parent      Task?       @relation("TaskSubtasks", fields: [parentId], references: [id])
+  subtasks    Task[]      @relation("TaskSubtasks")
+  timeEntries TimeEntry[]
+  labels      Label[]     @relation("TaskLabels")
+  comments    Comment[]
+
+  @@map("tasks")
+}
+
+// ─── ISSUES ─────────────────────────────────────────────────
+
+model Issue {
+  id          String    @id @default(cuid())
+  identifier  String    @unique
+  title       String
+  description String?
+  status      String    @default("OPEN")
+  priority    String    @default("MEDIUM")
+  severity    String?
+  projectId   String
+  assigneeId  String?
+  reporterId  String
+  dueDate     DateTime?
+  resolvedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee User?    @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  reporter User     @relation("IssueReporter", fields: [reporterId], references: [id])
+  labels   Label[]  @relation("IssueLabels")
+  comments Comment[]
+
+  @@map("issues")
+}
+
+// ─── NOTES & IDEAS ──────────────────────────────────────────
+
+model Note {
+  id          String   @id @default(cuid())
+  title       String
+  content     String?
+  contentText String   @default("")
+  blocks      Json?
+  authorId    String
+  parentId    String?
+  position    Int      @default(0)
+  isPinned    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author   User   @relation(fields: [authorId], references: [id])
+  parent   Note?  @relation("NoteTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children Note[] @relation("NoteTree")
+  tags     Tag[]  @relation("NoteTags")
+
+  @@index([authorId, parentId, position])
+  @@map("notes")
+}
+
+model Tag {
+  id    String  @id @default(cuid())
+  name  String  @unique
+  color String?
+
+  notes Note[] @relation("NoteTags")
+
+  @@map("tags")
+}
+
+// ─── PERFORMANCE & TIME TRACKING ────────────────────────────
+
+model TimeEntry {
+  id          String    @id @default(cuid())
+  userId      String
+  taskId      String?
+  description String?
+  startTime   DateTime
+  endTime     DateTime?
+  duration    Int?
+  billable    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user User  @relation(fields: [userId], references: [id])
+  task Task? @relation(fields: [taskId], references: [id])
+
+  @@map("time_entries")
+}
+
+model PerformanceMetric {
+  id          String   @id @default(cuid())
+  projectId   String
+  metricType  String
+  value       Float
+  periodStart DateTime
+  periodEnd   DateTime
+  metadata    String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+
+  @@map("performance_metrics")
+}
+
+// ─── AI CONVERSATIONS ───────────────────────────────────────
+
+model AIConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String?
+  agentType String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id])
+  messages AIMessage[]
+
+  @@map("ai_conversations")
+}
+
+model AIMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String
+  toolCalls      String?
+  toolResults    String?
+  tokenCount     Int?
+  createdAt      DateTime @default(now())
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("ai_messages")
+}
+
+// ─── INTEGRATIONS ───────────────────────────────────────────
+
+model ConnectedAccount {
+  id                    String    @id @default(cuid())
+  userId                String
+  provider              String
+  providerAccountId     String
+  encryptedAccessToken  String
+  encryptedRefreshToken String?
+  tokenExpiry           DateTime?
+  scopes                String    @default("")
+  metadata              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@map("connected_accounts")
+}
+
+// ─── SHARED ─────────────────────────────────────────────────
+
+model Label {
+  id    String @id @default(cuid())
+  name  String @unique
+  color String
+
+  tasks  Task[]  @relation("TaskLabels")
+  issues Issue[] @relation("IssueLabels")
+
+  @@map("labels")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  content   String
+  authorId  String
+  taskId    String?
+  issueId   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  author User   @relation(fields: [authorId], references: [id])
+  task   Task?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  issue  Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@map("comments")
+}
+
+// ─── GITHUB IMPORT ──────────────────────────────────────────
+
+model GitHubImportLog {
+  id               String    @id @default(cuid())
+  userId           String
+  githubOrgId      Int
+  githubOrgLogin   String
+  teamId           String
+  projectsImported Int       @default(0)
+  membersImported  Int       @default(0)
+  membersSkipped   Int       @default(0)
+  status           String    @default("PENDING")
+  errorMessage     String?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("github_import_logs")
+}

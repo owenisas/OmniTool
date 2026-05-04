@@ -1,0 +1,23 @@
+{
+  "name": "@omnitool/integrations",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./providers/*": "./src/providers/*.ts",
+    "./lib/*": "./src/lib/*.ts"
+  },
+  "dependencies": {
+    "@linear/sdk": "^29.0.0",
+    "@notionhq/client": "^2.3.0",
+    "@octokit/app": "^15.1.6",
+    "@octokit/oauth-app": "^7.1.6",
+    "@omnitool/database": "workspace:*",
+    "@slack/web-api": "^7.8.0",
+    "octokit": "^4.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
