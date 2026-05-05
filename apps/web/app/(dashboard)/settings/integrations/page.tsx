@@ -13,7 +13,7 @@ import {
   SlackIcon,
   LinearIcon,
 } from "@/components/icons/brand-icons";
-import { startOAuthFlow } from "@/lib/tauri";
+import { startOAuthFlow, openInBrowser } from "@/lib/tauri";
 import { GitHubImportDialog } from "@/components/integrations/github-import-dialog";
 import { NotionImportDialog } from "@/components/integrations/notion-import-dialog";
 
@@ -217,7 +217,9 @@ export default function IntegrationsPage() {
                 <Button
                   size="sm"
                   onClick={() =>
-                    startOAuthFlow("/api/integrations/notion/authorize")
+                    openInBrowser(
+                      `${window.location.origin}/api/integrations/notion/authorize`
+                    )
                   }
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
