@@ -47,3 +47,4 @@ apps/web/public/serwist-worker-*.js
 *.tsbuildinfo
 coverage/
 .vercel
+supabase/.temp/
