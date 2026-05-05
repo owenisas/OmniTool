@@ -4,6 +4,7 @@ import { createTRPCRouter, protectedProcedure } from "../init";
 import {
   executeGitHubImportSchema,
   disconnectIntegrationSchema,
+  importNotionPagesSchema,
 } from "@omnitool/shared/validators";
 import {
   createGitHubClient,
@@ -13,7 +14,13 @@ import {
   getOrgDetails,
   listOrgRepos,
   listOrgMembers,
+  createNotionClient,
+  searchNotionPages,
+  listNotionPages,
+  getNotionPageMeta,
+  notionBlocksToMarkdown,
 } from "@omnitool/integrations";
+import { markdownToNoteBlocks, blocksToPlainText } from "@omnitool/ai/utils";
 
 function slugify(name: string): string {
   return name
@@ -70,6 +77,11 @@ const githubRouter = createTRPCRouter({
       importedOrgIds.map((t: any) => [t.githubOrgId, { id: t.id, name: t.name }])
     );
 
+    const personalTeam = await ctx.prisma.team.findUnique({
+      where: { githubOrgLogin: `~${profile.login}` },
+      select: { id: true, name: true },
+    });
+
     // Include personal account as first option
     const personalEntry = {
       id: 0, // sentinel
@@ -77,8 +89,8 @@ const githubRouter = createTRPCRouter({
       description: "Your personal repositories",
       avatarUrl: profile.avatarUrl ?? null,
       isPersonal: true as const,
-      alreadyImported: false,
-      existingTeam: null as { id: string; name: string } | null,
+      alreadyImported: !!personalTeam,
+      existingTeam: personalTeam ?? null,
     };
 
     const orgEntries = orgs.map((org) => ({
@@ -121,10 +133,15 @@ const githubRouter = createTRPCRouter({
       }
 
       // Check existing team
-      const existingTeam = await ctx.prisma.team.findFirst({
-        where: { githubOrgId: orgDetails.id },
-        select: { id: true, name: true, slug: true },
-      });
+      const existingTeam = !input.isPersonal
+        ? await ctx.prisma.team.findUnique({
+            where: { githubOrgId: orgDetails.id },
+            select: { id: true, name: true, slug: true },
+          })
+        : await ctx.prisma.team.findUnique({
+            where: { githubOrgLogin: `~${input.orgLogin}` },
+            select: { id: true, name: true, slug: true },
+          });
 
       // Check which repos are already imported
       const existingProjects = await ctx.prisma.project.findMany({
@@ -229,30 +246,21 @@ const githubRouter = createTRPCRouter({
       let membersSkipped = 0;
 
       // 1. Upsert team from org/personal
-      let team = !input.isPersonal
-        ? await ctx.prisma.team.findFirst({
-            where: { githubOrgId: orgId },
-          })
-        : await ctx.prisma.team.findFirst({
-            where: { githubOrgLogin: input.orgLogin, githubOrgId: 0 },
-          });
-
-      if (team) {
-        team = await ctx.prisma.team.update({
-          where: { id: team.id },
-          data: {
-            name: orgName,
-            description: orgDescription,
-          },
-        });
-      } else {
+      let team: any;
+      if (!input.isPersonal) {
+        // Org import — githubOrgId is unique, safe to upsert
         const slug = await generateUniqueSlug(
           ctx.prisma,
           input.orgLogin,
           "team"
         );
-        team = await ctx.prisma.team.create({
-          data: {
+        team = await ctx.prisma.team.upsert({
+          where: { githubOrgId: orgId },
+          update: {
+            name: orgName,
+            description: orgDescription,
+          },
+          create: {
             name: orgName,
             slug,
             description: orgDescription,
@@ -261,6 +269,38 @@ const githubRouter = createTRPCRouter({
             githubImportedAt: new Date(),
           },
         });
+      } else {
+        // Personal import — use ~login prefix to differentiate from org logins
+        const personalOrgLogin = `~${input.orgLogin}`;
+        team = await ctx.prisma.team.findUnique({
+          where: { githubOrgLogin: personalOrgLogin },
+        });
+
+        if (team) {
+          team = await ctx.prisma.team.update({
+            where: { id: team.id },
+            data: {
+              name: orgName,
+              description: orgDescription,
+            },
+          });
+        } else {
+          const slug = await generateUniqueSlug(
+            ctx.prisma,
+            input.orgLogin,
+            "team"
+          );
+          team = await ctx.prisma.team.create({
+            data: {
+              name: orgName,
+              slug,
+              description: orgDescription,
+              githubOrgId: null,
+              githubOrgLogin: personalOrgLogin,
+              githubImportedAt: new Date(),
+            },
+          });
+        }
       }
 
       // 2. Ensure importing user is OWNER
@@ -329,27 +369,49 @@ const githubRouter = createTRPCRouter({
 
           if (!user) {
             // Create placeholder user
-            user = await ctx.prisma.user.create({
-              data: {
-                email: `github+${member.login}@placeholder.omnitool.dev`,
-                name: member.login,
-                avatarUrl: member.avatarUrl,
-                githubUserId: member.id,
-                githubLogin: member.login,
-                role: "MEMBER",
-              },
-            });
+            try {
+              user = await ctx.prisma.user.create({
+                data: {
+                  email: `github+${member.login}@placeholder.omnitool.dev`,
+                  name: member.login,
+                  avatarUrl: member.avatarUrl,
+                  githubUserId: member.id,
+                  githubLogin: member.login,
+                  role: "MEMBER",
+                },
+              });
+            } catch (e: any) {
+              if (e.code === "P2002") {
+                // Unique constraint violation — another import created this user concurrently
+                user = await ctx.prisma.user.findFirst({
+                  where: {
+                    OR: [
+                      { githubUserId: member.id },
+                      { githubLogin: member.login },
+                    ],
+                  },
+                });
+                if (!user) throw e; // shouldn't happen, but safety
+              } else {
+                throw e;
+              }
+            }
           } else {
             // Update github info if needed
             if (!user.githubUserId || !user.githubLogin) {
-              await ctx.prisma.user.update({
-                where: { id: user.id },
-                data: {
-                  githubUserId: member.id,
-                  githubLogin: member.login,
-                  ...(user.avatarUrl ? {} : { avatarUrl: member.avatarUrl }),
-                },
-              });
+              try {
+                await ctx.prisma.user.update({
+                  where: { id: user.id },
+                  data: {
+                    githubUserId: user.githubUserId ?? member.id,
+                    githubLogin: user.githubLogin ?? member.login,
+                    ...(user.avatarUrl ? {} : { avatarUrl: member.avatarUrl }),
+                  },
+                });
+              } catch (e: any) {
+                // Ignore unique constraint violations — another user may have claimed these
+                if (e.code !== "P2002") throw e;
+              }
             }
           }
 
@@ -402,6 +464,136 @@ const githubRouter = createTRPCRouter({
     }),
 });
 
+const notionRouter = createTRPCRouter({
+  // List pages available for import
+  listPages: protectedProcedure
+    .input(z.object({ cursor: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const account = await ctx.prisma.connectedAccount.findUnique({
+        where: { userId_provider: { userId: ctx.userId, provider: "NOTION" } },
+      });
+      if (!account) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Notion account not connected",
+        });
+      }
+
+      const client = await createNotionClient(ctx.userId);
+      const result = await listNotionPages(client, input?.cursor ?? undefined);
+
+      // Check which pages are already imported
+      const existingNotes = await ctx.prisma.note.findMany({
+        where: { notionPageId: { in: result.pages.map((p) => p.id) } },
+        select: { notionPageId: true },
+      });
+      const importedIds = new Set(existingNotes.map((n) => n.notionPageId));
+
+      return {
+        pages: result.pages.map((p) => ({
+          ...p,
+          alreadyImported: importedIds.has(p.id),
+        })),
+        hasMore: result.hasMore,
+        nextCursor: result.nextCursor,
+      };
+    }),
+
+  // Search pages by query
+  searchPages: protectedProcedure
+    .input(z.object({ query: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const account = await ctx.prisma.connectedAccount.findUnique({
+        where: { userId_provider: { userId: ctx.userId, provider: "NOTION" } },
+      });
+      if (!account) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Notion account not connected",
+        });
+      }
+
+      const client = await createNotionClient(ctx.userId);
+      const results = await searchNotionPages(client, input.query);
+
+      const pages = results.map((page: any) => {
+        let title = "Untitled";
+        if (page.properties) {
+          const titleProp = Object.values(page.properties).find(
+            (p: any) => p.type === "title"
+          ) as any;
+          if (titleProp?.title?.[0]?.plain_text) {
+            title = titleProp.title.map((t: any) => t.plain_text).join("");
+          }
+        }
+        return {
+          id: page.id,
+          title,
+          icon: page.icon?.emoji || page.icon?.external?.url || null,
+          lastEditedTime: page.last_edited_time,
+          url: page.url,
+          parentType: page.parent?.type || null,
+        };
+      });
+
+      // Check which already imported
+      const existingNotes = await ctx.prisma.note.findMany({
+        where: { notionPageId: { in: pages.map((p: any) => p.id) } },
+        select: { notionPageId: true },
+      });
+      const importedIds = new Set(existingNotes.map((n: any) => n.notionPageId));
+
+      return {
+        pages: pages.map((p: any) => ({
+          ...p,
+          alreadyImported: importedIds.has(p.id),
+        })),
+      };
+    }),
+
+  // Import selected pages as notes
+  importPages: protectedProcedure
+    .input(importNotionPagesSchema)
+    .mutation(async ({ ctx, input }) => {
+      const client = await createNotionClient(ctx.userId);
+      let imported = 0;
+      let skipped = 0;
+
+      for (const pageId of input.selectedPageIds) {
+        // Skip already imported
+        const existing = await ctx.prisma.note.findFirst({
+          where: { notionPageId: pageId },
+        });
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
+        const meta = await getNotionPageMeta(client, pageId);
+
+        // Rich pipeline: Notion → Markdown → BlockNote blocks
+        const markdown = await notionBlocksToMarkdown(client, pageId);
+        const blocknoteBlocks = await markdownToNoteBlocks(markdown);
+        const contentText = blocksToPlainText(blocknoteBlocks);
+
+        await ctx.prisma.note.create({
+          data: {
+            title: meta.title || "Untitled",
+            content: markdown,
+            contentText: contentText || markdown,
+            blocks: blocknoteBlocks as any,
+            authorId: ctx.userId,
+            notionPageId: pageId,
+            notionUrl: meta.url,
+          },
+        });
+        imported++;
+      }
+
+      return { imported, skipped };
+    }),
+});
+
 export const integrationRouter = createTRPCRouter({
   listConnected: protectedProcedure.query(async ({ ctx }) => {
     return ctx.prisma.connectedAccount.findMany({
@@ -440,4 +632,5 @@ export const integrationRouter = createTRPCRouter({
     }),
 
   github: githubRouter,
+  notion: notionRouter,
 });

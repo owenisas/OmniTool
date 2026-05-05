@@ -1,0 +1,11 @@
+node_modules
+.next
+.turbo
+dist
+target
+apps/desktop/src-tauri/target
+.git
+.env
+.env.local
+.env.production
+*.tsbuildinfo

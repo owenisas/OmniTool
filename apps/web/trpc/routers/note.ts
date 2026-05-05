@@ -118,27 +118,27 @@ export const noteRouter = createTRPCRouter({
   create: protectedProcedure.input(createNoteSchema).mutation(async ({ ctx, input }) => {
     const { tags, parentId, ...rest } = input;
 
+    // Validate parent in parallel with creation if parentId provided,
+    // otherwise skip the aggregate for position — new notes appear at top
+    // (position 0, sorted before others by updatedAt desc tiebreaker).
+    // The list sorts: isPinned desc → position asc → updatedAt desc
+    // Position 0 puts it first among unpinned, which is desired for new notes.
     if (parentId) {
       const parent = await ctx.prisma.note.findFirst({
         where: { id: parentId, authorId: ctx.userId },
+        select: { id: true },
       });
       if (!parent) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Parent note not found" });
       }
     }
 
-    const agg = await ctx.prisma.note.aggregate({
-      where: { authorId: ctx.userId, parentId: parentId ?? null },
-      _max: { position: true },
-    });
-    const position = (agg._max.position ?? -1) + 1;
-
     return ctx.prisma.note.create({
       data: {
         ...rest,
         contentText: rest.contentText ?? "",
         parentId: parentId ?? null,
-        position,
+        position: 0, // new notes appear at top; reorder via move procedure
         authorId: ctx.userId,
         ...(tags && {
           tags: {

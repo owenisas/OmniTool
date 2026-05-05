@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop shell capability set.","local":true,"windows":["main"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"OmniTool desktop capability set.","local":true,"windows":["main"],"permissions":["core:default","updater:default","notification:default","deep-link:default","clipboard-manager:default","global-shortcut:default","window-state:default","store:default","shell:allow-open"]}}

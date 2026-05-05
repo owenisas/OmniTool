@@ -37,6 +37,13 @@ export function TRPCReactProvider({ children }: { children: React.ReactNode }) {
             return fetch(url, {
               ...options,
               credentials: "include",
+            }).catch((err) => {
+              // Graceful offline handling — throw a recognizable error
+              // instead of letting the network error propagate and crash the UI
+              if (typeof navigator !== "undefined" && !navigator.onLine) {
+                throw new Error("OFFLINE");
+              }
+              throw err;
             });
           },
         }),

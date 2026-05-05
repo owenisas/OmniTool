@@ -12,3 +12,9 @@ export const disconnectIntegrationSchema = z.object({
 });
 
 export type ExecuteGitHubImportInput = z.infer<typeof executeGitHubImportSchema>;
+
+export const importNotionPagesSchema = z.object({
+  selectedPageIds: z.array(z.string()).min(1, "Select at least one page"),
+});
+
+export type ImportNotionPagesInput = z.infer<typeof importNotionPagesSchema>;

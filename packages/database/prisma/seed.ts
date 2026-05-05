@@ -1,4 +1,4 @@
-import { PrismaClient } from "../src/generated/client";
+import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 // Ensure DATABASE_URL is set for local PostgreSQL development.

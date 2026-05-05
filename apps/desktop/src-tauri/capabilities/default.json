@@ -1,7 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop shell capability set.",
+  "description": "OmniTool desktop capability set.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "notification:default",
+    "deep-link:default",
+    "clipboard-manager:default",
+    "global-shortcut:default",
+    "window-state:default",
+    "store:default",
+    "shell:allow-open"
+  ]
 }

@@ -1,8 +1,5 @@
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
-import bcrypt from "bcryptjs";
 import { createTRPCRouter, protectedProcedure } from "../init";
-import { changePasswordSchema } from "@omnitool/shared/validators";
 
 export const userRouter = createTRPCRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -18,18 +15,12 @@ export const userRouter = createTRPCRouter({
         githubLogin: true,
         createdAt: true,
         updatedAt: true,
-        passwordHash: true,
         teamMembers: {
           include: { team: true },
         },
       },
     });
-    if (!user) return null;
-    const { passwordHash, ...rest } = user;
-    return {
-      ...rest,
-      hasPassword: Boolean(passwordHash),
-    };
+    return user ?? null;
   }),
 
   getById: protectedProcedure
@@ -85,41 +76,5 @@ export const userRouter = createTRPCRouter({
         where: { id: ctx.userId },
         data: input,
       });
-    }),
-
-  changePassword: protectedProcedure
-    .input(changePasswordSchema)
-    .mutation(async ({ ctx, input }) => {
-      const user = await ctx.prisma.user.findUnique({
-        where: { id: ctx.userId },
-        select: { passwordHash: true },
-      });
-
-      if (!user?.passwordHash) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "Password sign-in is not enabled for this account. Use your identity provider instead.",
-        });
-      }
-
-      const valid = await bcrypt.compare(
-        input.currentPassword,
-        user.passwordHash
-      );
-      if (!valid) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Current password is incorrect.",
-        });
-      }
-
-      const passwordHash = await bcrypt.hash(input.newPassword, 12);
-      await ctx.prisma.user.update({
-        where: { id: ctx.userId },
-        data: { passwordHash },
-      });
-
-      return { ok: true as const };
     }),
 });

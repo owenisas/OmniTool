@@ -3,6 +3,7 @@ import { getOmniLanguageModel } from "@/lib/ai/language-model";
 import { chatAgentConfig } from "@omnitool/ai/agents";
 import { chatSystemPrompt } from "@omnitool/ai/prompts";
 import { createChatTools } from "@omnitool/ai";
+import { prisma } from "@omnitool/database";
 import { generateText } from "ai";
 import { NextResponse } from "next/server";
 
@@ -33,7 +34,10 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = (await req.json()) as { messages?: IncomingMessage[] };
+    const body = (await req.json()) as {
+      messages?: IncomingMessage[];
+      conversationId?: string;
+    };
     const raw = Array.isArray(body.messages) ? body.messages : [];
 
     const messages = raw
@@ -54,6 +58,49 @@ export async function POST(req: Request) {
       );
     }
 
+    // Resolve or create conversation
+    let conversationId = body.conversationId;
+
+    if (conversationId) {
+      const existing = await prisma.aIConversation.findFirst({
+        where: { id: conversationId, userId: session.user.id },
+      });
+      if (!existing) {
+        return NextResponse.json(
+          { error: "Conversation not found" },
+          { status: 404 }
+        );
+      }
+    } else {
+      // Auto-generate title from the first user message
+      const firstUserMsg = messages.find((m) => m.role === "user");
+      const autoTitle = firstUserMsg
+        ? firstUserMsg.content.slice(0, 100) +
+          (firstUserMsg.content.length > 100 ? "..." : "")
+        : "New conversation";
+
+      const conversation = await prisma.aIConversation.create({
+        data: {
+          userId: session.user.id,
+          title: autoTitle,
+          agentType: "chat",
+        },
+      });
+      conversationId = conversation.id;
+    }
+
+    // Save the incoming user message (only the last one to avoid duplicating history)
+    const lastUserMessage = messages.filter((m) => m.role === "user").pop();
+    if (lastUserMessage) {
+      await prisma.aIMessage.create({
+        data: {
+          conversationId,
+          role: "user",
+          content: lastUserMessage.content,
+        },
+      });
+    }
+
     const tools = createChatTools({ userId: session.user.id });
 
     const result = await generateText({
@@ -69,8 +116,36 @@ export async function POST(req: Request) {
       result.text?.trim() ||
       "I ran the requested tools but did not produce a text reply. Ask again with more detail.";
 
+    // Save assistant response
+    const toolCallsJson =
+      result.toolCalls && result.toolCalls.length > 0
+        ? JSON.stringify(result.toolCalls)
+        : null;
+    const toolResultsJson =
+      result.toolResults && result.toolResults.length > 0
+        ? JSON.stringify(result.toolResults)
+        : null;
+
+    await prisma.aIMessage.create({
+      data: {
+        conversationId,
+        role: "assistant",
+        content,
+        toolCalls: toolCallsJson,
+        toolResults: toolResultsJson,
+        tokenCount: result.usage?.totalTokens ?? null,
+      },
+    });
+
+    // Touch conversation updatedAt
+    await prisma.aIConversation.update({
+      where: { id: conversationId },
+      data: { updatedAt: new Date() },
+    });
+
     return NextResponse.json({
       content,
+      conversationId,
       provider: resolved.provider,
     });
   } catch (error) {

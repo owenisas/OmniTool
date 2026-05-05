@@ -1,63 +1,94 @@
-import NextAuth from "next-auth";
-import Credentials from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
+import { cache } from "react";
+import { createSupabaseServerClient } from "./supabase/server";
 import { prisma } from "@omnitool/database";
-import { z } from "zod";
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
-});
+export interface AppSession {
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    image: string | null;
+  };
+}
 
-export const { handlers, auth, signIn, signOut } = NextAuth({
-  // No adapter needed — Credentials + JWT doesn't store sessions in DB
-  session: { strategy: "jwt" },
-  pages: {
-    signIn: "/login",
-  },
-  providers: [
-    Credentials({
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
+/**
+ * Get the current authenticated user session.
+ *
+ * Wrapped with React `cache()` so multiple calls within the same
+ * server request (layout → page → tRPC context) share one result —
+ * only one Supabase + Prisma roundtrip per request instead of 3-4.
+ */
+export const auth = cache(async (): Promise<AppSession | null> => {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user: supabaseUser },
+  } = await supabase.auth.getUser();
+
+  if (!supabaseUser) return null;
+
+  // Look up the app user by Supabase Auth ID
+  let appUser = await prisma.user.findUnique({
+    where: { supabaseAuthId: supabaseUser.id },
+    select: { id: true, email: true, name: true, avatarUrl: true, role: true },
+  });
+
+  // JIT sync: if the Supabase user exists but the app user doesn't yet
+  // (e.g. trigger hasn't fired or user signed up via Supabase directly),
+  // create the app user now.
+  if (!appUser) {
+    const meta = supabaseUser.user_metadata ?? {};
+    appUser = await prisma.user.create({
+      data: {
+        supabaseAuthId: supabaseUser.id,
+        email: supabaseUser.email!,
+        name:
+          meta.name ??
+          meta.full_name ??
+          meta.preferred_username ??
+          supabaseUser.email?.split("@")[0] ??
+          "User",
+        avatarUrl:
+          meta.avatar_url ??
+          meta.picture ??
+          null,
       },
-      async authorize(credentials) {
-        try {
-          const parsed = loginSchema.safeParse(credentials);
-          if (!parsed.success) return null;
+      select: { id: true, email: true, name: true, avatarUrl: true, role: true },
+    });
 
-          const { email, password } = parsed.data;
-          const user = await prisma.user.findUnique({ where: { email } });
-          if (!user?.passwordHash) return null;
-
-          const valid = await bcrypt.compare(password, user.passwordHash);
-          if (!valid) return null;
-
-          return {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            image: user.avatarUrl,
-          };
-        } catch (error) {
-          console.error("[auth] Authorize error:", error);
-          throw error;
-        }
+    // Auto-accept any pending team invitations for this email
+    const pendingInvitations = await prisma.teamInvitation.findMany({
+      where: {
+        email: supabaseUser.email!,
+        acceptedAt: null,
+        expiresAt: { gt: new Date() },
       },
-    }),
-  ],
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user) {
-        token.id = user.id;
+    });
+
+    for (const invitation of pendingInvitations) {
+      try {
+        await prisma.teamMember.create({
+          data: {
+            userId: appUser.id,
+            teamId: invitation.teamId,
+            role: invitation.role,
+          },
+        });
+        await prisma.teamInvitation.update({
+          where: { id: invitation.id },
+          data: { acceptedAt: new Date() },
+        });
+      } catch {
+        // Skip if already a member (e.g. duplicate invitation race)
       }
-      return token;
+    }
+  }
+
+  return {
+    user: {
+      id: appUser.id,
+      email: appUser.email,
+      name: appUser.name,
+      image: appUser.avatarUrl,
     },
-    async session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.id as string;
-      }
-      return session;
-    },
-  },
+  };
 });

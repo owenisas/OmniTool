@@ -1,0 +1,109 @@
+# Release Desktop — Build and publish Tauri desktop apps
+#
+# Triggered by pushing a version tag (e.g. v0.1.0).
+# Builds for macOS (ARM + Intel), Windows, and Linux.
+# Attaches binaries + latest.json (for auto-updater) to a GitHub Release.
+#
+# SETUP:
+# 1. Generate a Tauri updater key pair:
+#      pnpm tauri signer generate -w ~/.tauri/omnitool.key
+#    Save the public key in tauri.conf.json plugins.updater.pubkey
+# 2. Add these GitHub repo secrets:
+#    - TAURI_SIGNING_PRIVATE_KEY: contents of the private key file
+#    - TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password for the key (if set)
+# 3. (Optional) For macOS notarization, add:
+#    - APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD
+#    - APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+
+name: Release Desktop
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS ARM
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS Intel
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows
+
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.27.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "apps/desktop/src-tauri -> target"
+
+      # Linux: install webkit2gtk and other deps
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Build and release with Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS notarization (optional — remove if no Apple Developer account)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "OmniTool ${{ github.ref_name }}"
+          releaseBody: "Desktop release for ${{ github.ref_name }}. Download the installer for your platform below."
+          releaseDraft: true
+          prerelease: false
+          projectPath: apps/desktop
+          args: --target ${{ matrix.target }}

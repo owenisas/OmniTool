@@ -1,0 +1,68 @@
+# docker-compose.yml — Local development environment
+# Usage:
+#   docker compose up        — Start all services
+#   docker compose up -d     — Start in background
+#   docker compose down      — Stop all services
+#   docker compose down -v   — Stop and remove volumes (reset DB data)
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — primary database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: omnitool-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: omnitool
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Web app — production-like container build
+  # Uncomment this block to test the Docker image locally.
+  # For daily development, use `pnpm dev` directly instead.
+  # ---------------------------------------------------------------------------
+  # web:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: omnitool-web
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/omnitool?schema=public"
+  #     AUTH_SECRET: "local-dev-secret-change-in-production"
+  #     AUTH_URL: "http://localhost:3000"
+  #     NODE_ENV: production
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Adminer — lightweight database GUI (access at http://localhost:8080)
+  # ---------------------------------------------------------------------------
+  adminer:
+    image: adminer:latest
+    container_name: omnitool-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+    driver: local

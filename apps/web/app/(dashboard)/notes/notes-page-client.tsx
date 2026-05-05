@@ -156,9 +156,19 @@ export function NotesPageClient() {
       <aside className="w-full shrink-0 space-y-4 lg:w-72">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-muted-foreground">Pages</h2>
-          <Button size="sm" onClick={() => openNewNote(null)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              createNote.mutate({
+                title: "Untitled",
+                blocks: getEmptyNoteBlocks(),
+                contentText: "",
+              });
+            }}
+            disabled={createNote.isPending}
+          >
             <FilePlus2 className="mr-1 h-4 w-4" />
-            New note
+            {createNote.isPending ? "Creating..." : "New note"}
           </Button>
         </div>
 

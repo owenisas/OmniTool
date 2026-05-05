@@ -1,0 +1,167 @@
+# Deploy Pipeline — Vercel deployment on push to main / PR
+#
+# SETUP INSTRUCTIONS:
+# 1. Create a Vercel project and link this repo (root directory: apps/web)
+# 2. Add these secrets to your GitHub repo settings:
+#    - VERCEL_TOKEN:      Personal access token from https://vercel.com/account/tokens
+#    - VERCEL_ORG_ID:     From .vercel/project.json after `vercel link`
+#    - VERCEL_PROJECT_ID: From .vercel/project.json after `vercel link`
+# 3. Set environment variables in the Vercel dashboard:
+#    - DATABASE_URL, DIRECT_URL, AUTH_SECRET, AUTH_URL
+#    - NVIDIA_API_KEY or ANTHROPIC_API_KEY
+#    - INTEGRATION_ENCRYPTION_KEY
+#    - Any other vars from .env.example
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Only one deploy at a time per ref; cancel previous for PRs, queue for main
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Gate deployment behind CI passing
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    needs: [ci]
+    timeout-minutes: 15
+
+    # Only deploy if web app or packages changed
+    # (The Vercel ignoreCommand in vercel.json handles this too, but this saves runner time)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.27.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install Vercel CLI
+        run: pnpm add -g vercel@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run database migrations (production only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: pnpm db:generate && pnpm db:deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=${{ github.event_name == 'push' && 'production' || 'preview' }} --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Build Project Artifacts
+        run: vercel build ${{ github.event_name == 'push' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy to Vercel (Production)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: deploy-production
+        run: |
+          url=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "deployment_url=$url" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Deploy to Vercel (Preview)
+        if: github.event_name == 'pull_request'
+        id: deploy-preview
+        run: |
+          url=$(vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }})
+          echo "deployment_url=$url" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Comment Preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy-preview.outputs.deployment_url }}';
+            if (url) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `Vercel Preview Deployment:\n${url}`
+              });
+            }
+
+# ─── ALTERNATIVE: DOCKER BUILD & PUSH (commented out) ───────────────────────
+# Uncomment below and remove the Vercel job above if deploying via container.
+#
+#  env:
+#    REGISTRY: ghcr.io
+#    IMAGE_NAME: ${{ github.repository }}
+#
+#  build-and-push:
+#    name: Build & Push Docker Image
+#    runs-on: ubuntu-latest
+#    needs: [ci]
+#    timeout-minutes: 20
+#
+#    permissions:
+#      contents: read
+#      packages: write
+#
+#    steps:
+#      - name: Checkout code
+#        uses: actions/checkout@v4
+#
+#      - name: Set up Docker Buildx
+#        uses: docker/setup-buildx-action@v3
+#
+#      - name: Log in to GitHub Container Registry
+#        uses: docker/login-action@v3
+#        with:
+#          registry: ${{ env.REGISTRY }}
+#          username: ${{ github.actor }}
+#          password: ${{ secrets.GITHUB_TOKEN }}
+#
+#      - name: Extract metadata (tags, labels)
+#        id: meta
+#        uses: docker/metadata-action@v5
+#        with:
+#          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+#          tags: |
+#            type=sha,prefix=
+#            type=raw,value=latest,enable={{is_default_branch}}
+#            type=semver,pattern={{version}}
+#
+#      - name: Build and push Docker image
+#        uses: docker/build-push-action@v6
+#        with:
+#          context: .
+#          push: true
+#          tags: ${{ steps.meta.outputs.tags }}
+#          labels: ${{ steps.meta.outputs.labels }}
+#          cache-from: type=gha
+#          cache-to: type=gha,mode=max
+#          build-args: |
+#            NEXT_PUBLIC_APP_VERSION=${{ github.sha }}

@@ -28,10 +28,24 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["dmg", "nsis", "deb", "appimage"],
+    "createUpdaterArtifacts": true,
     "publisher": "Reunify",
     "category": "Productivity",
     "shortDescription": "Internal productivity and performance tracking app",
     "longDescription": "OmniTool is an internal app for performance tracking, issue tracking, notes, and AI agents."
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Reunify/OmniTool/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["omnitool"]
+      }
+    }
   }
 }

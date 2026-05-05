@@ -10,6 +10,15 @@ export {
   listOrgRepos,
   listOrgMembers,
 } from "./providers/github";
-export { createNotionClient } from "./providers/notion";
+export {
+  createNotionClient,
+  searchNotionPages,
+  getNotionDatabases,
+  getNotionPageBlocks,
+  getNotionPageMeta,
+  notionBlocksToPlainText,
+  notionBlocksToMarkdown,
+  listNotionPages,
+} from "./providers/notion";
 export { createSlackClient } from "./providers/slack";
 export { createLinearClient } from "./providers/linear";

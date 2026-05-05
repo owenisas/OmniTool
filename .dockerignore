@@ -1,0 +1,61 @@
+# Dependencies (reinstalled in Docker build)
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt in Docker build)
+.next
+**/.next
+out
+**/out
+dist
+**/dist
+
+# Tauri/Desktop (not needed for web container)
+apps/desktop/src-tauri/target
+
+# Environment files (secrets must be injected at runtime, not baked into image)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files (prevent recursive context)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+
+# Turborepo cache
+.turbo
+**/.turbo
+
+# Debug logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage
+**/.coverage
+
+# Prisma migrations history (schema is needed, migrations applied via db:deploy)
+# Keep schema but ignore local dev SQLite if any
+*.db
+*.db-journal

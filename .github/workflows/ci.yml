@@ -1,0 +1,83 @@
+# CI Pipeline — runs on every PR and push to main
+# Validates code quality (lint, typecheck) and build integrity.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  # Cancel in-progress runs for the same PR/branch to save resources
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Required for Prisma generate during build
+  DATABASE_URL: ***REMOVED***
+  # Dummy auth secret so Next.js build doesn't fail on missing env
+  AUTH_SECRET: "ci-placeholder-secret-not-for-production"
+  AUTH_URL: "http://localhost:3000"
+  # Use standalone output for production-like builds
+  NEXT_OUTPUT: "standalone"
+
+jobs:
+  ci:
+    name: Lint, Typecheck & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      # PostgreSQL service container — required for Prisma generate/validate
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: omnitool
+        ports:
+          - 5432:5432
+        # Health checks ensure Postgres is ready before jobs run
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # pnpm must be installed before setup-node so caching works
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.27.0"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # Run lint and typecheck in parallel using turbo's built-in parallelism
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      # Placeholder for future test step (Vitest)
+      # - name: Test
+      #   run: pnpm test

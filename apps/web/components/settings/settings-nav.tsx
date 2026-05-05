@@ -18,6 +18,7 @@ import {
   Palette,
   Plug,
   Info,
+  Terminal,
 } from "lucide-react";
 
 const GROUPS = [
@@ -43,6 +44,16 @@ const GROUPS = [
     label: "Connections",
     links: [
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
+    ],
+  },
+  {
+    label: "Developer",
+    links: [
+      {
+        href: "/settings/coding-sessions",
+        label: "Coding Sessions",
+        icon: Terminal,
+      },
     ],
   },
   {

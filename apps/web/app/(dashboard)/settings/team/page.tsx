@@ -51,6 +51,7 @@ import {
   Github,
 } from "lucide-react";
 import { AddMemberDialog } from "./add-member-dialog";
+import { PendingInvitations } from "./pending-invitations";
 
 export default function TeamSettingsPage() {
   const { activeTeam, teams } = useTeam();
@@ -400,6 +401,8 @@ function MembersTab({ isAdminOrOwner, isOwner }: MembersTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {isAdminOrOwner && <PendingInvitations />}
 
       <AddMemberDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} />
 

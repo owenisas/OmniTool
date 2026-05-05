@@ -19,9 +19,9 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\""
   },
   "devDependencies": {
+    "prettier": "^3.4.0",
     "turbo": "^2.4.0",
-    "typescript": "^5.7.0",
-    "prettier": "^3.4.0"
+    "typescript": "^5.7.0"
   },
   "packageManager": "pnpm@10.27.0",
   "engines": {
@@ -35,5 +35,8 @@
       "esbuild",
       "sharp"
     ]
+  },
+  "dependencies": {
+    "react-resizable-panels": "^4.11.0"
   }
 }

@@ -4,7 +4,7 @@ import { createOmniPowerSyncConnector } from "@/lib/powersync/connector";
 import { omniPowerSyncSchema } from "@/lib/powersync/schema";
 import { PowerSyncContext } from "@powersync/react";
 import { PowerSyncDatabase } from "@powersync/web";
-import { useSession } from "next-auth/react";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useEffect, useRef, useState } from "react";
 
 /**
@@ -12,12 +12,26 @@ import { useEffect, useRef, useState } from "react";
  * are set server-side (JWT returned from GET /api/sync/token).
  */
 export function PowerSyncProvider({ children }: { children: React.ReactNode }) {
-  const { data: session, status } = useSession();
+  const [isAuthed, setIsAuthed] = useState(false);
   const [db, setDb] = useState<PowerSyncDatabase | null>(null);
   const instanceRef = useRef<PowerSyncDatabase | null>(null);
 
+  // Listen for Supabase auth state changes
   useEffect(() => {
-    if (status !== "authenticated" || !session?.user?.id) {
+    const supabase = createSupabaseBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAuthed(!!session);
+    });
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsAuthed(!!session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthed) {
       void instanceRef.current?.close();
       instanceRef.current = null;
       setDb(null);
@@ -59,7 +73,7 @@ export function PowerSyncProvider({ children }: { children: React.ReactNode }) {
       void instanceRef.current?.close();
       instanceRef.current = null;
     };
-  }, [status, session?.user?.id]);
+  }, [isAuthed]);
 
   if (!db) {
     return <>{children}</>;

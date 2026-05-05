@@ -1,7 +1,7 @@
 "use client";
 
 import { trpc } from "@/trpc/client";
-import { NoteBlockEditor } from "@/components/notes/note-block-editor";
+import { NoteEditorWithChat } from "@/components/notes/note-editor-with-chat";
 import { Loader2 } from "lucide-react";
 
 export function NoteDetailClient({ noteId }: { noteId: string }) {
@@ -25,9 +25,5 @@ export function NoteDetailClient({ noteId }: { noteId: string }) {
 
   if (!data) return null;
 
-  return (
-    <div className="mx-auto max-w-3xl">
-      <NoteBlockEditor key={data.id} note={data} />
-    </div>
-  );
+  return <NoteEditorWithChat note={data} />;
 }

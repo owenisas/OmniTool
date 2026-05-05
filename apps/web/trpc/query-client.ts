@@ -8,7 +8,28 @@ export function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 30 * 1000,
+        // Local-first: treat cached data as fresh for 5 minutes.
+        // Navigation between pages uses cache instantly; background refetch keeps it updated.
+        staleTime: 5 * 60 * 1000,
+        // Keep cached data for 24h so offline reads work from React Query cache
+        gcTime: 24 * 60 * 60 * 1000,
+        // Use cache when offline, fetch when online
+        networkMode: "offlineFirst",
+        // Don't refetch on every window focus — only when data is stale
+        refetchOnWindowFocus: "always",
+        // Don't refetch on mount if cache is fresh (prevents re-fetches on tab switch)
+        refetchOnMount: true,
+        // Don't refetch on reconnect unless stale
+        refetchOnReconnect: "always",
+        retry(failureCount, error) {
+          // Don't retry when explicitly offline
+          if (error instanceof Error && error.message === "OFFLINE") return false;
+          return failureCount < 3;
+        },
+      },
+      mutations: {
+        // Mutations should not retry by default — user can trigger again
+        retry: false,
       },
       dehydrate: {
         serializeData: superjson.serialize,

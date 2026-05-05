@@ -1,9 +1,26 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { oauthLimiter } from "@/lib/rate-limit";
 import { providerRegistry } from "@omnitool/integrations";
 import crypto from "crypto";
 
-export async function GET() {
+export async function GET(request: Request) {
+  // Rate limit OAuth initiation
+  if (oauthLimiter) {
+    const ip =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip") ||
+      "anonymous";
+    const { success, reset } = await oauthLimiter.limit(ip);
+    if (!success) {
+      const retryAfter = Math.ceil((reset - Date.now()) / 1000);
+      return NextResponse.json(
+        { error: "Too many requests. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+  }
+
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.redirect(new URL("/login", process.env.AUTH_URL));

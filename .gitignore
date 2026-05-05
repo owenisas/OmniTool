@@ -39,6 +39,11 @@ packages/database/src/generated/
 # tauri
 apps/desktop/src-tauri/target/
 
+# serwist service worker build artifacts
+apps/web/public/sw.js
+apps/web/public/serwist-worker-*.js
+
 # misc
 *.tsbuildinfo
 coverage/
+.vercel

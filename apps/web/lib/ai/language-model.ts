@@ -21,7 +21,7 @@ export function getOmniLanguageModel() {
     });
     const modelId =
       process.env.NVIDIA_NIM_MODEL?.trim() ||
-      "meta/llama-3.1-8b-instruct";
+      "google/gemma-4-31b-it";
     return { provider: "nvidia-nim" as const, model: nim(modelId) };
   }
 

@@ -10,7 +10,8 @@ import {
 } from "@omnitool/ui/components/popover";
 import { Separator } from "@omnitool/ui/components/separator";
 import { cn } from "@/lib/utils";
-import { ChevronsUpDown, Check, Plus, Github } from "lucide-react";
+import { ChevronsUpDown, Check, Plus } from "lucide-react";
+import { GitHubIcon } from "@/components/icons/brand-icons";
 
 // Stable color per team name
 const teamColors = [
@@ -38,7 +39,7 @@ export function TeamSwitcher() {
 
   if (isLoading || !activeTeam) {
     return (
-      <div className="flex h-14 items-center border-b px-4">
+      <div className="flex h-12 items-center px-4">
         <div className="h-7 w-7 animate-pulse rounded-md bg-muted" />
         <div className="ml-2 h-4 w-24 animate-pulse rounded bg-muted" />
       </div>
@@ -49,7 +50,7 @@ export function TeamSwitcher() {
     <>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <button className="flex h-14 w-full items-center gap-2 border-b px-4 text-left hover:bg-accent/50 transition-colors">
+          <button className="flex h-12 w-full items-center gap-2 px-4 text-left hover:bg-accent/50 transition-colors">
             <div
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded-md text-white text-xs font-bold shrink-0",
@@ -124,7 +125,7 @@ export function TeamSwitcher() {
             }}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
           >
-            <Github className="h-4 w-4" />
+            <GitHubIcon className="h-4 w-4" />
             Import from GitHub
           </button>
         </PopoverContent>

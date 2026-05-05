@@ -20,7 +20,12 @@ export const updateMemberRoleSchema = z.object({
   role: z.enum(["OWNER", "ADMIN", "MEMBER"]),
 });
 
+export const acceptInvitationSchema = z.object({
+  token: z.string().min(1, "Token is required"),
+});
+
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
 export type UpdateTeamInput = z.infer<typeof updateTeamSchema>;
 export type AddMemberInput = z.infer<typeof addMemberSchema>;
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
+export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;

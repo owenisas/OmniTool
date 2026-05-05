@@ -15,6 +15,7 @@ export default function manifest(): MetadataRoute.Manifest {
     background_color: "#f8fafc",
     theme_color: "#0f172a",
     categories: ["productivity", "business", "developer"],
+    prefer_related_applications: false,
     icons: [
       {
         src: "/icon.svg",
@@ -27,6 +28,26 @@ export default function manifest(): MetadataRoute.Manifest {
         sizes: "any",
         type: "image/svg+xml",
         purpose: "maskable",
+      },
+    ],
+    shortcuts: [
+      {
+        name: "New Task",
+        short_name: "Task",
+        url: "/tasks?action=new",
+        icons: [{ src: "/icon.svg", sizes: "any" }],
+      },
+      {
+        name: "New Note",
+        short_name: "Note",
+        url: "/notes?action=new",
+        icons: [{ src: "/icon.svg", sizes: "any" }],
+      },
+      {
+        name: "My Work",
+        short_name: "Work",
+        url: "/work",
+        icons: [{ src: "/icon.svg", sizes: "any" }],
       },
     ],
   };
