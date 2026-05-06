@@ -2,6 +2,8 @@ export * from "./project";
 export * from "./task";
 export * from "./issue";
 export * from "./note";
+export * from "./note-mention";
+export * from "./note-comment";
 export * from "./team";
 export * from "./integration";
 export * from "./user";

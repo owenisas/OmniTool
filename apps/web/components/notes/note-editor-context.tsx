@@ -38,3 +38,12 @@ export function useNoteEditor() {
   }
   return ctx;
 }
+
+/**
+ * Same as `useNoteEditor` but returns `null` instead of throwing when used
+ * outside a provider. Used by surfaces (e.g. the embed-picker) that mount
+ * both inside and outside an active note context.
+ */
+export function useOptionalNoteEditor() {
+  return useContext(NoteEditorContext);
+}

@@ -17,8 +17,10 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Inbox as InboxIcon,
   Users,
 } from "lucide-react";
+import { trpc } from "@/trpc/client";
 import {
   Tooltip,
   TooltipContent,
@@ -53,6 +55,7 @@ const navSections: NavSection[] = [
   {
     label: "Workspace",
     items: [
+      { name: "Inbox", href: "/inbox", icon: InboxIcon },
       { name: "My Tasks", href: "/tasks", icon: CheckSquare },
       { name: "Projects", href: "/projects", icon: FolderKanban },
       { name: "Issues", href: "/issues", icon: Bug },
@@ -120,12 +123,15 @@ function NavRow({
   isActive,
   collapsed,
   onNavigate,
+  badge,
 }: {
   item: NavItem;
   isActive: boolean;
   collapsed: boolean;
   onNavigate: (href: string) => void;
+  badge?: number | null;
 }) {
+  const showBadge = typeof badge === "number" && badge > 0;
   const link = (
     <Link
       href={item.href}
@@ -143,7 +149,15 @@ function NavRow({
           : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
       )}
     >
-      <item.icon className="h-[18px] w-[18px] shrink-0" />
+      <span className="relative shrink-0">
+        <item.icon className="h-[18px] w-[18px]" />
+        {showBadge && collapsed ? (
+          <span
+            className="absolute -right-1 -top-1 inline-block h-2 w-2 rounded-full bg-primary ring-2 ring-background"
+            aria-hidden
+          />
+        ) : null}
+      </span>
       <span
         className={cn(
           "truncate text-sm font-medium transition-[max-width,opacity,margin] duration-300 ease-in-out",
@@ -154,6 +168,11 @@ function NavRow({
       >
         {item.name}
       </span>
+      {showBadge && !collapsed ? (
+        <span className="ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      ) : null}
     </Link>
   );
 
@@ -208,6 +227,14 @@ export function Sidebar() {
   // Effective collapsed state for inner content (overlay shows expanded layout
   // while keeping the outer rail width reserved).
   const collapsed = isCollapsed && !showOverlay;
+
+  // Inbox unread count for the badge. Cheap query — keep stale long enough
+  // that we don't refetch on every nav, but realtime invalidation will push
+  // updates promptly when a new mention arrives.
+  const inboxUnreadQuery = trpc.noteMention.unreadCount.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+  const inboxUnread = inboxUnreadQuery.data ?? 0;
 
   function navigate(href: string) {
     startTransition(() => {
@@ -331,6 +358,7 @@ export function Sidebar() {
                       isActive={navigationActive(pathname, item.href)}
                       collapsed={collapsed}
                       onNavigate={navigate}
+                      badge={item.href === "/inbox" ? inboxUnread : undefined}
                     />
                   ))}
                 </div>

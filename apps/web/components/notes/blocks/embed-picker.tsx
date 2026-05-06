@@ -11,6 +11,7 @@ import { Input } from "@omnitool/ui/components/input";
 import { Button } from "@omnitool/ui/components/button";
 import { Badge } from "@omnitool/ui/components/badge";
 import { trpc } from "@/trpc/client";
+import { useOptionalNoteEditor } from "../note-editor-context";
 
 export type EmbedPickerKind =
   | "taskList"
@@ -75,9 +76,24 @@ export function EmbedPicker() {
   const projectsQuery = trpc.project.list.useQuery(undefined, {
     enabled: kind === "projectCard" || kind === "taskList",
   });
-  const usersQuery = trpc.user.list.useQuery(undefined, {
-    enabled: kind === "person" || kind === "dailySummary",
+  // For @-person mentions we scope the user list to members of the active
+  // note's teamspace (via `useNoteEditor()` context). The daily-summary
+  // picker still uses the global user list — it's a content embed, not a
+  // notification target.
+  const noteEditor = useOptionalNoteEditor();
+  const personScopedUsersQuery = trpc.user.listForMention.useQuery(
+    { noteId: noteEditor?.noteId ?? "" },
+    {
+      enabled: kind === "person" && Boolean(noteEditor?.noteId),
+    },
+  );
+  const globalUsersQuery = trpc.user.list.useQuery(undefined, {
+    enabled: kind === "dailySummary" || (kind === "person" && !noteEditor?.noteId),
   });
+  const usersQuery =
+    kind === "person" && noteEditor?.noteId
+      ? personScopedUsersQuery
+      : globalUsersQuery;
   const noteSearchQuery = trpc.note.searchNotes.useQuery(
     { query: search, limit: 20 },
     {

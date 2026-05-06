@@ -18,6 +18,26 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
   };
 };
 
+/**
+ * Load every teamspace (PERSONAL + TEAM) the current user can access. Used
+ * by procedures that read or mutate teamspace-scoped resources (notes, tags,
+ * comments). The result is fresh per-request — there is no cache layer here
+ * because membership churn (invites, leave) needs to reflect immediately.
+ *
+ * Returns the user's TeamMember teamIds. The user's PERSONAL team is always
+ * present in the result because `auth()` provisions one + a TeamMember row.
+ */
+export async function loadTeamspaceIds(
+  prismaClient: typeof prisma,
+  userId: string,
+): Promise<string[]> {
+  const memberships = await prismaClient.teamMember.findMany({
+    where: { userId },
+    select: { teamId: true },
+  });
+  return memberships.map((m) => m.teamId);
+}
+
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,
 });
@@ -38,7 +58,19 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 });
 
 /**
- * Note-mutation procedure: protected + per-user Upstash rate limit.
+ * Notes-domain read procedure: protected + loads `ctx.teamspaceIds` (the set
+ * of teamspace ids the current user belongs to). Use this in place of
+ * `protectedProcedure` for any query that reads notes/tags/comments so
+ * authorization filters can be uniformly written as
+ * `teamId: { in: ctx.teamspaceIds }`.
+ */
+export const noteProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  const teamspaceIds = await loadTeamspaceIds(ctx.prisma, ctx.userId);
+  return next({ ctx: { ...ctx, teamspaceIds } });
+});
+
+/**
+ * Note-mutation procedure: notes-domain protection + per-user Upstash rate limit.
  *
  * Budget: 120 req/min/user (`noteMutationLimiter`). Editor autosave debounces
  * to ~1/s during active typing, so a heavy 2-min editing burst stays well
@@ -48,7 +80,7 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
  * Falls open (no enforcement) when Upstash env vars are not set, mirroring
  * the existing OAuth/login limiter behaviour.
  */
-export const noteMutationProcedure = protectedProcedure.use(
+export const noteMutationProcedure = noteProcedure.use(
   async ({ ctx, next }) => {
     if (noteMutationLimiter) {
       const { success, reset } = await noteMutationLimiter.limit(

@@ -2,6 +2,7 @@ import {
   blocksJsonSchema,
   createNoteSchema,
   moveNoteSchema,
+  transferNoteToTeamspaceSchema,
   updateNoteSchema,
 } from "@omnitool/shared/validators";
 import type { Prisma } from "@omnitool/database";
@@ -10,7 +11,7 @@ import { z } from "zod";
 import {
   createTRPCRouter,
   noteMutationProcedure,
-  protectedProcedure,
+  noteProcedure,
 } from "../init";
 import {
   projectNoteTemplate,
@@ -31,6 +32,9 @@ const noteListSelect = {
   updatedAt: true,
   createdAt: true,
   tags: true,
+  authorId: true,
+  teamId: true,
+  team: { select: { id: true, name: true, kind: true } },
   linkedProjectId: true,
   linkedProject: { select: { id: true, name: true } },
   isAutoCreated: true,
@@ -108,13 +112,13 @@ async function syncNoteLinks(
 
 async function reindexSiblings(
   tx: Prisma.TransactionClient,
-  authorId: string,
+  teamId: string,
   parentId: string | null,
   excludeId?: string,
 ) {
   const siblings = await tx.note.findMany({
     where: {
-      authorId,
+      teamId,
       parentId,
       ...(excludeId ? { id: { not: excludeId } } : {}),
     },
@@ -132,7 +136,7 @@ async function reindexSiblings(
 }
 
 export const noteRouter = createTRPCRouter({
-  list: protectedProcedure
+  list: noteProcedure
     .input(
       z
         .object({
@@ -156,7 +160,7 @@ export const noteRouter = createTRPCRouter({
       const skip = input?.skip ?? 0;
       return ctx.prisma.note.findMany({
         where: {
-          authorId: ctx.userId,
+          teamId: { in: ctx.teamspaceIds },
           deletedAt: null,
           ...(hasTreeFilter && { parentId: input!.parentId ?? null }),
           ...(input?.search && {
@@ -186,7 +190,7 @@ export const noteRouter = createTRPCRouter({
    * archive view). Returns `{ items, nextCursor }`. Cursor is the last item's
    * id; safe to use with the deterministic `position+updatedAt+id` ordering.
    */
-  listPaginated: protectedProcedure
+  listPaginated: noteProcedure
     .input(
       z.object({
         search: z.string().optional(),
@@ -200,7 +204,7 @@ export const noteRouter = createTRPCRouter({
       const hasTreeFilter = "parentId" in input;
       const items = await ctx.prisma.note.findMany({
         where: {
-          authorId: ctx.userId,
+          teamId: { in: ctx.teamspaceIds },
           deletedAt: null,
           ...(hasTreeFilter && { parentId: input.parentId ?? null }),
           ...(input.search && {
@@ -232,14 +236,15 @@ export const noteRouter = createTRPCRouter({
       };
     }),
 
-  getById: protectedProcedure
+  getById: noteProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const note = await ctx.prisma.note.findFirst({
-        where: { id: input.id, authorId: ctx.userId, deletedAt: null },
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds }, deletedAt: null },
         include: {
           tags: true,
           author: { select: { name: true } },
+          team: { select: { id: true, name: true, kind: true } },
           parent: { select: { id: true, title: true } },
           children: {
             where: { deletedAt: null },
@@ -265,8 +270,11 @@ export const noteRouter = createTRPCRouter({
    * Walk parentId chain from the given note up to the root.
    * Returns the chain in order [root, ..., self] where each entry is
    * `{ id, title }`. Limited to MAX_DEPTH+1 hops as a safety cap.
+   *
+   * The return type stays a plain array to keep existing callers (breadcrumbs)
+   * working; teamspace context is fetched separately via `getTeamspaceForNote`.
    */
-  getAncestorChain: protectedProcedure
+  getAncestorChain: noteProcedure
     .input(z.object({ noteId: z.string() }))
     .query(async ({ ctx, input }) => {
       const chain: { id: string; title: string }[] = [];
@@ -278,7 +286,7 @@ export const noteRouter = createTRPCRouter({
         seen.add(cur);
         const row: { id: string; title: string; parentId: string | null } | null =
           await ctx.prisma.note.findFirst({
-            where: { id: cur, authorId: ctx.userId },
+            where: { id: cur, teamId: { in: ctx.teamspaceIds } },
             select: { id: true, title: true, parentId: true },
           });
         if (!row) break;
@@ -289,10 +297,26 @@ export const noteRouter = createTRPCRouter({
     }),
 
   /**
+   * Resolve the teamspace a single note belongs to. Used by the breadcrumbs
+   * to prefix `/notes/[id]` routes with the teamspace name.
+   */
+  getTeamspaceForNote: noteProcedure
+    .input(z.object({ noteId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const note = await ctx.prisma.note.findFirst({
+        where: { id: input.noteId, teamId: { in: ctx.teamspaceIds } },
+        select: {
+          team: { select: { id: true, name: true, kind: true } },
+        },
+      });
+      return note?.team ?? null;
+    }),
+
+  /**
    * Search notes (title + body) for the global command palette.
    * Title matches rank ahead of body matches; pagination via offset.
    */
-  searchNotes: protectedProcedure
+  searchNotes: noteProcedure
     .input(
       z.object({
         query: z.string().max(200),
@@ -305,7 +329,7 @@ export const noteRouter = createTRPCRouter({
       if (!q) {
         // Recent on empty query
         const rows = await ctx.prisma.note.findMany({
-          where: { authorId: ctx.userId, deletedAt: null },
+          where: { teamId: { in: ctx.teamspaceIds }, deletedAt: null },
           orderBy: { updatedAt: "desc" },
           take: input.limit,
           skip: input.offset,
@@ -331,7 +355,7 @@ export const noteRouter = createTRPCRouter({
       const [titleHits, bodyHits] = await Promise.all([
         ctx.prisma.note.findMany({
           where: {
-            authorId: ctx.userId,
+            teamId: { in: ctx.teamspaceIds },
             deletedAt: null,
             title: { contains: q, mode: "insensitive" },
           },
@@ -347,7 +371,7 @@ export const noteRouter = createTRPCRouter({
         }),
         ctx.prisma.note.findMany({
           where: {
-            authorId: ctx.userId,
+            teamId: { in: ctx.teamspaceIds },
             deletedAt: null,
             contentText: { contains: q, mode: "insensitive" },
           },
@@ -411,7 +435,7 @@ export const noteRouter = createTRPCRouter({
    * Backlinks: notes that contain a noteMention or noteEmbed pointing at
    * the given target note. Returns latest first.
    */
-  getBacklinks: protectedProcedure
+  getBacklinks: noteProcedure
     .input(
       z.object({
         noteId: z.string(),
@@ -421,7 +445,7 @@ export const noteRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const target = await ctx.prisma.note.findFirst({
-        where: { id: input.noteId, authorId: ctx.userId },
+        where: { id: input.noteId, teamId: { in: ctx.teamspaceIds } },
         select: { id: true },
       });
       if (!target) {
@@ -430,7 +454,7 @@ export const noteRouter = createTRPCRouter({
       const links = await ctx.prisma.noteLink.findMany({
         where: {
           targetNoteId: input.noteId,
-          source: { authorId: ctx.userId, deletedAt: null },
+          source: { teamId: { in: ctx.teamspaceIds }, deletedAt: null },
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
@@ -470,9 +494,9 @@ export const noteRouter = createTRPCRouter({
     }),
 
   /** List trashed (soft-deleted) notes for the current user. */
-  listTrash: protectedProcedure.query(async ({ ctx }) => {
+  listTrash: noteProcedure.query(async ({ ctx }) => {
     return ctx.prisma.note.findMany({
-      where: { authorId: ctx.userId, deletedAt: { not: null } },
+      where: { teamId: { in: ctx.teamspaceIds }, deletedAt: { not: null } },
       orderBy: { deletedAt: "desc" },
       select: {
         id: true,
@@ -489,7 +513,7 @@ export const noteRouter = createTRPCRouter({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.note.findFirst({
-        where: { id: input.id, authorId: ctx.userId },
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
         select: { id: true, parentId: true, deletedAt: true },
       });
       if (!existing || !existing.deletedAt) {
@@ -502,7 +526,7 @@ export const noteRouter = createTRPCRouter({
       let parentId: string | null = existing.parentId ?? null;
       if (parentId) {
         const parent = await ctx.prisma.note.findFirst({
-          where: { id: parentId, authorId: ctx.userId, deletedAt: null },
+          where: { id: parentId, teamId: { in: ctx.teamspaceIds }, deletedAt: null },
           select: { id: true },
         });
         parentId = parent?.id ?? null;
@@ -518,7 +542,7 @@ export const noteRouter = createTRPCRouter({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.note.findFirst({
-        where: { id: input.id, authorId: ctx.userId },
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
         select: { id: true, deletedAt: true },
       });
       if (!existing || !existing.deletedAt) {
@@ -532,7 +556,7 @@ export const noteRouter = createTRPCRouter({
     }),
 
   /** Most recent note edited today by the current user (for "Resume" widget). */
-  lastEditedToday: protectedProcedure.query(async ({ ctx }) => {
+  lastEditedToday: noteProcedure.query(async ({ ctx }) => {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const end = new Date(start);
@@ -543,6 +567,9 @@ export const noteRouter = createTRPCRouter({
         deletedAt: null,
         updatedAt: { gte: start, lt: end },
       },
+      // NB: lastEditedToday is intentionally scoped to *the current user's* edits
+      // across all their teamspaces — it powers the "Today" widget and we want
+      // the user's own activity, not their teammates'.
       orderBy: { updatedAt: "desc" },
       select: noteListSelect,
     });
@@ -557,14 +584,21 @@ export const noteRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const project = await ctx.prisma.project.findUnique({
         where: { id: input.projectId },
-        select: { id: true, name: true },
+        select: { id: true, name: true, teamId: true },
       });
       if (!project) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
       }
+      // Caller must be a member of the project's team to spawn a linked note.
+      if (!ctx.teamspaceIds.includes(project.teamId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You are not a member of this project's team",
+        });
+      }
 
       const existing = await ctx.prisma.note.findFirst({
-        where: { linkedProjectId: project.id, authorId: ctx.userId },
+        where: { linkedProjectId: project.id, teamId: { in: ctx.teamspaceIds } },
         select: { id: true },
       });
       if (existing) return { id: existing.id };
@@ -575,7 +609,7 @@ export const noteRouter = createTRPCRouter({
       let parentId: string | null = null;
       if (pref?.projectNotesParentId) {
         const parent = await ctx.prisma.note.findFirst({
-          where: { id: pref.projectNotesParentId, authorId: ctx.userId },
+          where: { id: pref.projectNotesParentId, teamId: { in: ctx.teamspaceIds } },
           select: { id: true },
         });
         parentId = parent?.id ?? null;
@@ -586,6 +620,7 @@ export const noteRouter = createTRPCRouter({
         data: {
           title: project.name,
           authorId: ctx.userId,
+          teamId: project.teamId,
           parentId,
           position: 0,
           isAutoCreated: true,
@@ -612,13 +647,14 @@ export const noteRouter = createTRPCRouter({
 
     const projects = await ctx.prisma.project.findMany({
       where: { teamId: { in: teamIds } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, teamId: true },
     });
 
-    // Existing linked notes for this user
+    // Existing linked notes within any of the user's teamspaces — covers
+    // notes created by another teammate (we still don't want a duplicate).
     const linked = await ctx.prisma.note.findMany({
       where: {
-        authorId: ctx.userId,
+        teamId: { in: ctx.teamspaceIds },
         linkedProjectId: { in: projects.map((p) => p.id) },
       },
       select: { linkedProjectId: true },
@@ -631,7 +667,7 @@ export const noteRouter = createTRPCRouter({
     let parentId: string | null = null;
     if (pref?.projectNotesParentId) {
       const parent = await ctx.prisma.note.findFirst({
-        where: { id: pref.projectNotesParentId, authorId: ctx.userId },
+        where: { id: pref.projectNotesParentId, teamId: { in: ctx.teamspaceIds } },
         select: { id: true },
       });
       parentId = parent?.id ?? null;
@@ -645,6 +681,7 @@ export const noteRouter = createTRPCRouter({
           data: {
             title: p.name,
             authorId: ctx.userId,
+            teamId: p.teamId,
             parentId,
             position: 0,
             isAutoCreated: true,
@@ -662,20 +699,46 @@ export const noteRouter = createTRPCRouter({
   }),
 
   create: noteMutationProcedure.input(createNoteSchema).mutation(async ({ ctx, input }) => {
-    const { tags, parentId, ...rest } = input;
+    const { tags, parentId, teamId: requestedTeamId, ...rest } = input;
+
+    // Resolve target teamspace. If not provided, fall back to the caller's
+    // PERSONAL teamspace (back-pointer set by `auth()`).
+    let teamId = requestedTeamId ?? null;
+    if (!teamId) {
+      const userRow = await ctx.prisma.user.findUnique({
+        where: { id: ctx.userId },
+        select: { personalTeamId: true },
+      });
+      teamId = userRow?.personalTeamId ?? null;
+    }
+    if (!teamId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "No teamspace available — your personal teamspace is missing. Please re-sign-in to provision it.",
+      });
+    }
+    if (!ctx.teamspaceIds.includes(teamId)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "You are not a member of that teamspace",
+      });
+    }
 
     // Validate parent in parallel with creation if parentId provided,
     // otherwise skip the aggregate for position — new notes appear at top
     // (position 0, sorted before others by updatedAt desc tiebreaker).
-    // The list sorts: isPinned desc → position asc → updatedAt desc
-    // Position 0 puts it first among unpinned, which is desired for new notes.
+    // Parent must live in the SAME teamspace as the new note.
     if (parentId) {
       const parent = await ctx.prisma.note.findFirst({
-        where: { id: parentId, authorId: ctx.userId },
+        where: { id: parentId, teamId },
         select: { id: true },
       });
       if (!parent) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Parent note not found" });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Parent note must be in the same teamspace",
+        });
       }
     }
 
@@ -686,6 +749,7 @@ export const noteRouter = createTRPCRouter({
         parentId: parentId ?? null,
         position: 0, // new notes appear at top; reorder via move procedure
         authorId: ctx.userId,
+        teamId,
         ...(tags && {
           tags: {
             connectOrCreate: tags.map((tag) => ({
@@ -719,7 +783,7 @@ export const noteRouter = createTRPCRouter({
     const { id, tags, ...data } = input;
 
     const existing = await ctx.prisma.note.findFirst({
-      where: { id, authorId: ctx.userId },
+      where: { id, teamId: { in: ctx.teamspaceIds } },
     });
     if (!existing) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
@@ -791,9 +855,9 @@ export const noteRouter = createTRPCRouter({
   move: noteMutationProcedure.input(moveNoteSchema).mutation(async ({ ctx, input }) => {
     await ctx.prisma.$transaction(async (tx) => {
       const note = await tx.note.findFirst({
-        where: { id: input.id, authorId: ctx.userId },
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
       });
-      if (!note) {
+      if (!note || !note.teamId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
       }
 
@@ -801,10 +865,14 @@ export const noteRouter = createTRPCRouter({
 
       if (newParentId) {
         const parent = await tx.note.findFirst({
-          where: { id: newParentId, authorId: ctx.userId },
+          where: { id: newParentId, teamId: note.teamId },
         });
         if (!parent) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Parent note not found" });
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "Parent note not found in this teamspace (use 'Move to teamspace' to cross teamspaces)",
+          });
         }
         if (newParentId === input.id) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Note cannot be its own parent" });
@@ -817,12 +885,12 @@ export const noteRouter = createTRPCRouter({
       const oldParentId = note.parentId;
 
       if (oldParentId !== newParentId) {
-        await reindexSiblings(tx, ctx.userId, oldParentId, input.id);
+        await reindexSiblings(tx, note.teamId, oldParentId, input.id);
       }
 
       const others = await tx.note.findMany({
         where: {
-          authorId: ctx.userId,
+          teamId: note.teamId,
           parentId: newParentId,
           id: { not: input.id },
         },
@@ -848,18 +916,98 @@ export const noteRouter = createTRPCRouter({
     });
 
     return ctx.prisma.note.findFirst({
-      where: { id: input.id, authorId: ctx.userId },
+      where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
       select: noteListSelect,
     });
   }),
+
+  /**
+   * Move a note (and its entire descendant subtree) to a different teamspace.
+   * Both source and destination teamspaces must be ones the caller belongs to.
+   * NoteLinks that point at notes the caller can't read in the destination
+   * teamspace are left in place — they will simply render as "locked" if the
+   * UI ever surfaces a cross-teamspace link picker.
+   */
+  transferToTeamspace: noteMutationProcedure
+    .input(transferNoteToTeamspaceSchema)
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.teamspaceIds.includes(input.teamId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You are not a member of the destination teamspace",
+        });
+      }
+
+      await ctx.prisma.$transaction(async (tx) => {
+        const note = await tx.note.findFirst({
+          where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
+          select: { id: true, teamId: true, parentId: true },
+        });
+        if (!note || !note.teamId) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+        }
+        if (note.teamId === input.teamId) {
+          // No-op transfer; still allow caller to set a parentId in the same
+          // teamspace, but `move` is the right tool for that. Short-circuit.
+          return;
+        }
+
+        // If a parent is requested in the destination, validate membership.
+        if (input.parentId) {
+          const newParent = await tx.note.findFirst({
+            where: { id: input.parentId, teamId: input.teamId },
+            select: { id: true },
+          });
+          if (!newParent) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Destination parent note not found",
+            });
+          }
+        }
+
+        // Walk the subtree (BFS) and collect every descendant id.
+        const subtreeIds: string[] = [note.id];
+        let frontier: string[] = [note.id];
+        const SAFETY_CAP = 5000;
+        while (frontier.length > 0 && subtreeIds.length < SAFETY_CAP) {
+          const children = await tx.note.findMany({
+            where: { parentId: { in: frontier }, teamId: note.teamId },
+            select: { id: true },
+          });
+          frontier = children.map((c) => c.id);
+          subtreeIds.push(...frontier);
+        }
+
+        // Re-parent + re-team the entire subtree atomically.
+        await tx.note.updateMany({
+          where: { id: { in: subtreeIds } },
+          data: { teamId: input.teamId },
+        });
+        // Re-root the moved note in the destination teamspace.
+        await tx.note.update({
+          where: { id: note.id },
+          data: { parentId: input.parentId ?? null, position: 0 },
+        });
+
+        // Reindex siblings on both ends.
+        await reindexSiblings(tx, note.teamId, note.parentId);
+        await reindexSiblings(tx, input.teamId, input.parentId ?? null, note.id);
+      });
+
+      return ctx.prisma.note.findFirst({
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds } },
+        select: noteListSelect,
+      });
+    }),
 
   delete: noteMutationProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.note.findFirst({
-        where: { id: input.id, authorId: ctx.userId, deletedAt: null },
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds }, deletedAt: null },
       });
-      if (!existing) {
+      if (!existing || !existing.teamId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
       }
       const parentId = existing.parentId;
@@ -868,7 +1016,7 @@ export const noteRouter = createTRPCRouter({
         where: { id: input.id },
         data: { deletedAt: new Date() },
       });
-      await reindexSiblings(ctx.prisma, ctx.userId, parentId);
+      await reindexSiblings(ctx.prisma, existing.teamId, parentId);
 
       emitActivityEvent({
         type: "note.deleted",
@@ -885,7 +1033,7 @@ export const noteRouter = createTRPCRouter({
    * List version history for a note (latest first). Cursor-paginated.
    * Default page size 50; max 100. Hard cap aligns with snapshot retention.
    */
-  listVersions: protectedProcedure
+  listVersions: noteProcedure
     .input(
       z.object({
         noteId: z.string(),
@@ -895,7 +1043,7 @@ export const noteRouter = createTRPCRouter({
     )
     .query(async ({ ctx, input }) => {
       const note = await ctx.prisma.note.findFirst({
-        where: { id: input.noteId, authorId: ctx.userId },
+        where: { id: input.noteId, teamId: { in: ctx.teamspaceIds } },
         select: { id: true },
       });
       if (!note) {
@@ -925,11 +1073,11 @@ export const noteRouter = createTRPCRouter({
     }),
 
   /** Fetch a single version's full content for preview. */
-  getVersion: protectedProcedure
+  getVersion: noteProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const version = await ctx.prisma.noteVersion.findFirst({
-        where: { id: input.id, note: { authorId: ctx.userId } },
+        where: { id: input.id, note: { teamId: { in: ctx.teamspaceIds } } },
         include: {
           editor: { select: { id: true, name: true, avatarUrl: true } },
           note: { select: { id: true, title: true } },
@@ -953,7 +1101,7 @@ export const noteRouter = createTRPCRouter({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const version = await ctx.prisma.noteVersion.findFirst({
-        where: { id: input.id, note: { authorId: ctx.userId } },
+        where: { id: input.id, note: { teamId: { in: ctx.teamspaceIds } } },
         include: { note: true },
       });
       if (!version) {

@@ -90,6 +90,8 @@ export function sortNotes<T extends TreeNode>(
 export interface GroupableNote extends TreeNode {
   tags?: { id: string; name: string }[];
   linkedProjectId?: string | null;
+  teamId?: string | null;
+  team?: { id: string; name: string; kind: string } | null;
 }
 
 export interface NoteGroup<T> {
@@ -107,7 +109,7 @@ export interface NoteGroup<T> {
  */
 export function groupNotes<T extends GroupableNote>(
   notes: T[],
-  groupBy: "none" | "pinned" | "tag" | "linkedProject",
+  groupBy: "none" | "pinned" | "tag" | "linkedProject" | "teamspace",
   projectNames: Map<string, string> = new Map(),
 ): NoteGroup<T>[] {
   if (groupBy === "none") {
@@ -143,6 +145,39 @@ export function groupNotes<T extends GroupableNote>(
       .map(([k, v]) => ({ key: `tag:${k}`, label: `#${v.label}`, notes: v.notes }));
     if (untagged.length)
       out.push({ key: "untagged", label: "Untagged", notes: untagged });
+    return out;
+  }
+
+  if (groupBy === "teamspace") {
+    const byTeam = new Map<string, { label: string; kind: string; notes: T[] }>();
+    const orphans: T[] = [];
+    for (const n of notes) {
+      const tid = n.teamId ?? n.team?.id ?? null;
+      if (!tid) {
+        orphans.push(n);
+        continue;
+      }
+      if (!byTeam.has(tid)) {
+        byTeam.set(tid, {
+          label: n.team?.name ?? "Teamspace",
+          kind: n.team?.kind ?? "TEAM",
+          notes: [],
+        });
+      }
+      byTeam.get(tid)!.notes.push(n);
+    }
+    const out: NoteGroup<T>[] = Array.from(byTeam.entries())
+      .sort(([, a], [, b]) => {
+        if (a.kind !== b.kind) return a.kind === "PERSONAL" ? -1 : 1;
+        return a.label.localeCompare(b.label);
+      })
+      .map(([k, v]) => ({
+        key: `team:${k}`,
+        label: v.kind === "PERSONAL" ? `${v.label} (Personal)` : v.label,
+        notes: v.notes,
+      }));
+    if (orphans.length)
+      out.push({ key: "no-team", label: "No teamspace", notes: orphans });
     return out;
   }
 

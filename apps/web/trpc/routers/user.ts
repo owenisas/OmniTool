@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { createTRPCRouter, protectedProcedure } from "../init";
+import { TRPCError } from "@trpc/server";
+import { createTRPCRouter, noteProcedure, protectedProcedure } from "../init";
 
 export const userRouter = createTRPCRouter({
   me: protectedProcedure.query(async ({ ctx }) => {
@@ -63,6 +64,38 @@ export const userRouter = createTRPCRouter({
       orderBy: { name: "asc" },
     });
   }),
+
+  /**
+   * Members of the teamspace that owns `noteId`. Used by the @-person picker
+   * on a note so users can only mention teammates of that specific note.
+   */
+  listForMention: noteProcedure
+    .input(z.object({ noteId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const note = await ctx.prisma.note.findFirst({
+        where: { id: input.noteId, teamId: { in: ctx.teamspaceIds } },
+        select: { teamId: true },
+      });
+      if (!note || !note.teamId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+      }
+      const memberships = await ctx.prisma.teamMember.findMany({
+        where: { teamId: note.teamId },
+        select: {
+          user: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              avatarUrl: true,
+            },
+          },
+        },
+      });
+      return memberships
+        .map((m) => m.user)
+        .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+    }),
 
   updateProfile: protectedProcedure
     .input(

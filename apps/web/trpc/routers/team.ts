@@ -35,9 +35,14 @@ async function generateUniqueSlug(
 }
 
 export const teamRouter = createTRPCRouter({
+  /**
+   * Real organizational teams the user belongs to. Excludes the per-user
+   * PERSONAL teamspace (which is exposed via `listMyTeamspaces`). This is what
+   * Settings → Team and the team switcher should consume.
+   */
   list: protectedProcedure.query(async ({ ctx }) => {
     const memberships = await ctx.prisma.teamMember.findMany({
-      where: { userId: ctx.userId },
+      where: { userId: ctx.userId, team: { kind: "TEAM" } },
       include: {
         team: {
           include: {
@@ -52,6 +57,33 @@ export const teamRouter = createTRPCRouter({
       role: m.role,
       joinedAt: m.joinedAt,
     }));
+  }),
+
+  /**
+   * Every teamspace the user can access — PERSONAL first, then TEAM rows by
+   * name. Used by the notes teamspace switcher and the import-target picker.
+   * Returns lightweight rows (id/name/kind/role) — no member/project counts.
+   */
+  listMyTeamspaces: protectedProcedure.query(async ({ ctx }) => {
+    const memberships = await ctx.prisma.teamMember.findMany({
+      where: { userId: ctx.userId },
+      select: {
+        role: true,
+        team: { select: { id: true, name: true, slug: true, kind: true } },
+      },
+    });
+    const rows = memberships.map((m) => ({
+      id: m.team.id,
+      name: m.team.name,
+      slug: m.team.slug,
+      kind: m.team.kind as "PERSONAL" | "TEAM",
+      role: m.role,
+    }));
+    rows.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "PERSONAL" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return rows;
   }),
 
   create: protectedProcedure

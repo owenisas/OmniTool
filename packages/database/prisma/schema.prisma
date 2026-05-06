@@ -21,12 +21,16 @@ model User {
   role            String   @default("MEMBER")
   githubUserId    Int?     @unique
   githubLogin     String?  @unique
+  /// Back-pointer to this user's auto-created PERSONAL teamspace. Set by the
+  /// JIT user-sync path in `auth()`. Nullable during the migration window.
+  personalTeamId  String?  @unique
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   emailVerified DateTime?
 
   teamMembers          TeamMember[]
+  personalTeam         Team?             @relation("PersonalTeam", fields: [personalTeamId], references: [id])
   assignedTasks        Task[]            @relation("TaskAssignee")
   createdTasks         Task[]            @relation("TaskCreator")
   assignedIssues       Issue[]           @relation("IssueAssignee")
@@ -43,6 +47,10 @@ model User {
   notePreference       UserNotePreference?
   newsDigests          NewsDigest[]
   agentHandoffs        AgentHandoff[]
+  mentionsReceived     NoteMention[]      @relation("MentionedUser")
+  mentionsSent         NoteMention[]      @relation("MentionAuthor")
+  noteComments         NoteComment[]      @relation("NoteCommentAuthor")
+  noteCommentReads     NoteCommentRead[]
 
   @@map("users")
 }
@@ -54,6 +62,11 @@ model Team {
   name             String
   slug             String    @unique
   description      String?
+  /// "PERSONAL" (auto-created per user, hidden from team-management UIs)
+  /// or "TEAM" (multi-member organization). Defaults to TEAM for backwards
+  /// compatibility with existing rows.
+  kind             String    @default("TEAM")
+  ownerId          String?
   githubOrgId      Int?      @unique
   githubOrgLogin   String?   @unique
   githubImportedAt DateTime?
@@ -64,7 +77,10 @@ model Team {
   projects             Project[]
   dailyCodingSummaries DailyCodingSummary[]
   invitations          TeamInvitation[]
+  notes                Note[]
+  personalForUser      User?                @relation("PersonalTeam")
 
+  @@index([kind])
   @@map("teams")
 }
 
@@ -195,6 +211,10 @@ model Note {
   contentText     String    @default("")
   blocks          Json?
   authorId        String
+  /// Teamspace owning this note. Nullable during the backfill window; the
+  /// application code treats a null teamId as "belongs to author's personal
+  /// teamspace" until the migration script populates the column.
+  teamId          String?
   parentId        String?
   position        Int       @default(0)
   isPinned        Boolean   @default(false)
@@ -207,6 +227,7 @@ model Note {
   updatedAt       DateTime  @updatedAt
 
   author          User              @relation(fields: [authorId], references: [id])
+  team            Team?             @relation(fields: [teamId], references: [id], onDelete: Cascade)
   parent          Note?             @relation("NoteTree", fields: [parentId], references: [id], onDelete: Cascade)
   children        Note[]            @relation("NoteTree")
   tags            Tag[]             @relation("NoteTags")
@@ -215,8 +236,13 @@ model Note {
   versions        NoteVersion[]
   outboundLinks   NoteLink[]        @relation("NoteLinkSource")
   inboundLinks    NoteLink[]        @relation("NoteLinkTarget")
+  mentions        NoteMention[]
+  comments        NoteComment[]
+  commentReads    NoteCommentRead[]
 
   @@index([authorId, parentId, position])
+  @@index([teamId, parentId, position])
+  @@index([teamId, deletedAt])
   @@index([notionPageId])
   @@index([linkedProjectId])
   @@index([authorId, deletedAt])
@@ -242,6 +268,60 @@ model NoteLink {
   @@index([targetNoteId])
   @@index([sourceNoteId])
   @@map("note_links")
+}
+
+// ─── NOTE MENTIONS (real @-person notifications) ────────────
+
+model NoteMention {
+  id              String   @id @default(cuid())
+  noteId          String
+  /// BlockNote block id where the @-chip was inserted, for jump-to.
+  blockId         String?
+  mentionedUserId String
+  createdById     String
+  createdAt       DateTime @default(now())
+  /// Set when the mentioned user opens / dismisses this mention.
+  readAt          DateTime?
+
+  note          Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  mentionedUser User @relation("MentionedUser", fields: [mentionedUserId], references: [id], onDelete: Cascade)
+  createdBy     User @relation("MentionAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([mentionedUserId, readAt])
+  @@index([noteId])
+  @@map("note_mentions")
+}
+
+// ─── NOTE COMMENTS (per-note flat thread) ───────────────────
+
+model NoteComment {
+  id          String    @id @default(cuid())
+  noteId      String
+  authorId    String
+  body        String
+  /// Optional BlockNote block id this comment pins to (page-level if null).
+  blockAnchor String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  note   Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  author User @relation("NoteCommentAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([noteId, createdAt])
+  @@map("note_comments")
+}
+
+model NoteCommentRead {
+  userId     String
+  noteId     String
+  lastReadAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@id([userId, noteId])
+  @@map("note_comment_reads")
 }
 
 // ─── NOTE VERSION HISTORY ───────────────────────────────────
@@ -588,6 +668,8 @@ model UserNotePreference {
   viewMode               String   @default("cards")
   sortBy                 String   @default("updatedDesc")
   groupBy                String   @default("none")
+  /// Last-selected teamspace lens on the /notes page. null = "All teamspaces".
+  activeTeamspaceId      String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 

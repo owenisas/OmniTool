@@ -55,6 +55,7 @@ const GROUP_OPTIONS: { value: GroupBy; label: string }[] = [
   { value: "pinned", label: "Pinned status" },
   { value: "tag", label: "Tag" },
   { value: "linkedProject", label: "Project" },
+  { value: "teamspace", label: "Teamspace" },
 ];
 
 export function NotesViewControls({

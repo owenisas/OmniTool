@@ -15,7 +15,7 @@ import {
   type GroupBy,
   type SortBy,
   type ViewMode,
-} from "@/trpc/routers/user-note-preference";
+} from "./view-types";
 
 export type { ViewMode, SortBy, GroupBy };
 
@@ -25,12 +25,15 @@ export interface ViewPrefs {
   viewMode: ViewMode;
   sortBy: SortBy;
   groupBy: GroupBy;
+  /** `null` = "All teamspaces" lens; otherwise the active teamspace id. */
+  activeTeamspaceId: string | null;
 }
 
 export const DEFAULT_VIEW_PREFS: ViewPrefs = {
   viewMode: "cards",
   sortBy: "updatedDesc",
   groupBy: "none",
+  activeTeamspaceId: null,
 };
 
 function isViewMode(v: unknown): v is ViewMode {
@@ -55,6 +58,10 @@ export function readViewPrefs(): ViewPrefs {
       viewMode: isViewMode(obj.viewMode) ? obj.viewMode : DEFAULT_VIEW_PREFS.viewMode,
       sortBy: isSortBy(obj.sortBy) ? obj.sortBy : DEFAULT_VIEW_PREFS.sortBy,
       groupBy: isGroupBy(obj.groupBy) ? obj.groupBy : DEFAULT_VIEW_PREFS.groupBy,
+      activeTeamspaceId:
+        typeof obj.activeTeamspaceId === "string"
+          ? obj.activeTeamspaceId
+          : null,
     };
   } catch {
     return DEFAULT_VIEW_PREFS;

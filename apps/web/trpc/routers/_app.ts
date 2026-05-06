@@ -4,6 +4,8 @@ import { projectRouter } from "./project";
 import { taskRouter } from "./task";
 import { issueRouter } from "./issue";
 import { noteRouter } from "./note";
+import { noteMentionRouter } from "./note-mention";
+import { noteCommentRouter } from "./note-comment";
 import { performanceRouter } from "./performance";
 import { timeEntryRouter } from "./timeEntry";
 import { teamRouter } from "./team";
@@ -22,6 +24,8 @@ export const appRouter = createTRPCRouter({
   task: taskRouter,
   issue: issueRouter,
   note: noteRouter,
+  noteMention: noteMentionRouter,
+  noteComment: noteCommentRouter,
   performance: performanceRouter,
   timeEntry: timeEntryRouter,
   team: teamRouter,

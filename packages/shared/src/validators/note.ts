@@ -56,6 +56,11 @@ export const blocksJsonSchema = z.any().superRefine((val, ctx) => {
 export const createNoteSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
   emoji: z.string().max(16).nullable().optional(),
+  /**
+   * Teamspace this note belongs to. When omitted the server falls back to the
+   * caller's PERSONAL teamspace (provisioned by `auth()`).
+   */
+  teamId: z.string().cuid().optional(),
   blocks: blocksJsonSchema,
   contentText: z.string().max(100_000).optional().default(""),
   parentId: z.string().cuid().nullable().optional(),
@@ -80,6 +85,15 @@ export const moveNoteSchema = z.object({
   position: z.number().int().min(0),
 });
 
+export const transferNoteToTeamspaceSchema = z.object({
+  id: z.string().cuid(),
+  teamId: z.string().cuid(),
+  parentId: z.string().cuid().nullable().optional(),
+});
+
 export type CreateNoteInput = z.infer<typeof createNoteSchema>;
 export type UpdateNoteInput = z.infer<typeof updateNoteSchema>;
 export type MoveNoteInput = z.infer<typeof moveNoteSchema>;
+export type TransferNoteToTeamspaceInput = z.infer<
+  typeof transferNoteToTeamspaceSchema
+>;

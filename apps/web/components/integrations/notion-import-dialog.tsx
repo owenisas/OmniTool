@@ -14,6 +14,13 @@ import { Button } from "@omnitool/ui/components/button";
 import { Badge } from "@omnitool/ui/components/badge";
 import { Separator } from "@omnitool/ui/components/separator";
 import { Input } from "@omnitool/ui/components/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@omnitool/ui/components/select";
 import { cn } from "@/lib/utils";
 import {
   Loader2,
@@ -21,6 +28,8 @@ import {
   FileText,
   Search,
   BookOpen,
+  User as UserIcon,
+  Users,
 } from "lucide-react";
 import { runBackgroundTask } from "@/lib/background-tasks/run";
 
@@ -48,9 +57,38 @@ export function NotionImportDialog({
   );
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [targetTeamId, setTargetTeamId] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const importMutation = trpc.integration.notion.importPages.useMutation();
+  const updatePref = trpc.userNotePreference.update.useMutation();
+
+  // Teamspaces the user can import into (PERSONAL first, then TEAM teams).
+  const teamspacesQuery = trpc.team.listMyTeamspaces.useQuery(undefined, {
+    enabled: open,
+  });
+  const teamspaces = teamspacesQuery.data ?? [];
+
+  // Default the target teamspace to the user's active notes-page lens, then
+  // their personal teamspace, then the first available.
+  const prefQuery = trpc.userNotePreference.get.useQuery(undefined, {
+    enabled: open,
+  });
+  useEffect(() => {
+    if (!open) return;
+    if (targetTeamId) return;
+    const fromPref = prefQuery.data?.activeTeamspaceId;
+    if (fromPref && teamspaces.some((t) => t.id === fromPref)) {
+      setTargetTeamId(fromPref);
+      return;
+    }
+    const personal = teamspaces.find((t) => t.kind === "PERSONAL");
+    if (personal) {
+      setTargetTeamId(personal.id);
+      return;
+    }
+    if (teamspaces[0]) setTargetTeamId(teamspaces[0].id);
+  }, [open, targetTeamId, prefQuery.data, teamspaces]);
 
   // Reset all state when dialog closes
   useEffect(() => {
@@ -58,6 +96,7 @@ export function NotionImportDialog({
       setSelectedPageIds(new Set());
       setSearchTerm("");
       setDebouncedSearch("");
+      setTargetTeamId(null);
     }
   }, [open]);
 
@@ -133,6 +172,7 @@ export function NotionImportDialog({
   const handleStartImport = useCallback(() => {
     const ids = Array.from(selectedPageIds);
     if (ids.length === 0) return;
+    if (!targetTeamId) return;
     void runBackgroundTask({
       id: `notion-import-${Date.now()}`,
       kind: "notion-import",
@@ -140,13 +180,30 @@ export function NotionImportDialog({
       href: "/notes",
       successToast: (r: { imported: number; skipped: number }) =>
         `Notion import complete — ${r.imported} imported, ${r.skipped} skipped`,
-      work: () => importMutation.mutateAsync({ selectedPageIds: ids }),
+      work: () =>
+        importMutation.mutateAsync({
+          selectedPageIds: ids,
+          teamId: targetTeamId,
+        }),
       onSuccess: () => {
         void utils.note.list.invalidate();
+        // Switch the user's active teamspace lens to the import target so
+        // they land on their imports without an extra click.
+        if (targetTeamId) {
+          updatePref.mutate({ activeTeamspaceId: targetTeamId });
+        }
+        void utils.userNotePreference.get.invalidate();
       },
     });
     onOpenChange(false);
-  }, [selectedPageIds, importMutation, utils, onOpenChange]);
+  }, [
+    selectedPageIds,
+    targetTeamId,
+    importMutation,
+    updatePref,
+    utils,
+    onOpenChange,
+  ]);
 
   const selectedCount = selectedPageIds.size;
 
@@ -175,6 +232,45 @@ export function NotionImportDialog({
             you can keep using OmniTool while it finishes.
           </DialogDescription>
         </DialogHeader>
+
+        {/* Teamspace target picker */}
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            Import into
+          </label>
+          <Select
+            value={targetTeamId ?? ""}
+            onValueChange={(v) => setTargetTeamId(v)}
+            disabled={teamspacesQuery.isLoading || teamspaces.length === 0}
+          >
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue placeholder="Select a teamspace…" />
+            </SelectTrigger>
+            <SelectContent>
+              {teamspaces.map((t) => (
+                <SelectItem key={t.id} value={t.id}>
+                  <span className="inline-flex items-center gap-2">
+                    {t.kind === "PERSONAL" ? (
+                      <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                    ) : (
+                      <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                    )}
+                    <span>{t.name}</span>
+                    {t.kind === "PERSONAL" && (
+                      <span className="text-[10px] text-muted-foreground">
+                        Personal
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-[11px] text-muted-foreground">
+            Imported pages stay inside this teamspace. Move them later via the
+            row menu if you change your mind.
+          </p>
+        </div>
 
         {/* Search input */}
         <div className="relative">
@@ -299,7 +395,12 @@ export function NotionImportDialog({
               </Button>
               <Button
                 onClick={handleStartImport}
-                disabled={selectedCount === 0}
+                disabled={selectedCount === 0 || !targetTeamId}
+                title={
+                  !targetTeamId
+                    ? "Pick a teamspace to import into first"
+                    : undefined
+                }
               >
                 Import {selectedCount}{" "}
                 {selectedCount === 1 ? "page" : "pages"} in background

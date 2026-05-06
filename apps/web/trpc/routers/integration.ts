@@ -674,6 +674,51 @@ const notionRouter = createTRPCRouter({
       let imported = 0;
       let skipped = 0;
 
+      // Resolve target teamspace. If not specified, default to the caller's
+      // PERSONAL teamspace (provisioned by `auth()`). Validate membership.
+      let targetTeamId = input.teamId ?? null;
+      if (!targetTeamId) {
+        const me = await ctx.prisma.user.findUnique({
+          where: { id: ctx.userId },
+          select: { personalTeamId: true },
+        });
+        targetTeamId = me?.personalTeamId ?? null;
+      }
+      if (!targetTeamId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "No personal teamspace — please re-sign-in to provision one before importing.",
+        });
+      }
+      const membership = await ctx.prisma.teamMember.findUnique({
+        where: {
+          userId_teamId: { userId: ctx.userId, teamId: targetTeamId },
+        },
+        select: { teamId: true },
+      });
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You are not a member of the destination teamspace",
+        });
+      }
+
+      // Optional parent note must live inside the destination teamspace.
+      let rootParentId: string | null = input.parentId ?? null;
+      if (rootParentId) {
+        const parent = await ctx.prisma.note.findFirst({
+          where: { id: rootParentId, teamId: targetTeamId },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Parent note must be in the destination teamspace",
+          });
+        }
+      }
+
       // Map of Notion page id (with and without dashes) → Omnitool note id.
       // Pre-populated from any existing imports so we can re-link to them.
       // Notion page ids appear in URLs both with dashes (`a8e1...-...`) and
@@ -687,8 +732,10 @@ const notionRouter = createTRPCRouter({
       }
 
       // Seed map with previously-imported pages so cross-references resolve.
+      // We look across the destination teamspace so a teammate's imports are
+      // also reused as link targets.
       const existingAll = await ctx.prisma.note.findMany({
-        where: { authorId: ctx.userId, notionPageId: { not: null } },
+        where: { teamId: targetTeamId, notionPageId: { not: null } },
         select: { id: true, notionPageId: true },
       });
       for (const e of existingAll) {
@@ -708,7 +755,7 @@ const notionRouter = createTRPCRouter({
       for (const pageId of input.selectedPageIds) {
         try {
           const existing = await ctx.prisma.note.findFirst({
-            where: { notionPageId: pageId, authorId: ctx.userId },
+            where: { notionPageId: pageId, teamId: targetTeamId },
             select: { id: true },
           });
           if (existing) {
@@ -750,6 +797,8 @@ const notionRouter = createTRPCRouter({
               contentText: contentText || markdown,
               blocks: blocknoteBlocks as any,
               authorId: ctx.userId,
+              teamId: targetTeamId,
+              parentId: rootParentId,
               notionPageId: pageId,
               notionUrl: meta.url,
             },

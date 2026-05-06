@@ -2,6 +2,56 @@ import { cache } from "react";
 import { createSupabaseServerClient } from "./supabase/server";
 import { prisma } from "@omnitool/database";
 
+/**
+ * Idempotently provision the user's PERSONAL teamspace.
+ *
+ * Every user gets exactly one personal teamspace (a Team row with
+ * `kind=PERSONAL`) plus a TeamMember(role=OWNER) row. The user's
+ * `personalTeamId` back-pointer is set to that team for fast lookup.
+ *
+ * Safe to call repeatedly — runs at most one create per user.
+ */
+async function ensurePersonalTeamspace(
+  userId: string,
+  displayName: string,
+  existingPersonalTeamId: string | null,
+): Promise<string> {
+  if (existingPersonalTeamId) return existingPersonalTeamId;
+
+  const slug = `personal-${userId}`.slice(0, 191);
+
+  const existing = await prisma.team.findFirst({
+    where: { kind: "PERSONAL", ownerId: userId },
+    select: { id: true },
+  });
+
+  let teamId: string;
+  if (existing) {
+    teamId = existing.id;
+  } else {
+    const team = await prisma.team.create({
+      data: {
+        name: displayName.trim()
+          ? `${displayName.trim()}'s notes`
+          : "Personal notes",
+        slug,
+        kind: "PERSONAL",
+        ownerId: userId,
+        members: { create: { userId, role: "OWNER" } },
+      },
+      select: { id: true },
+    });
+    teamId = team.id;
+  }
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { personalTeamId: teamId },
+  });
+
+  return teamId;
+}
+
 export interface AppSession {
   user: {
     id: string;
@@ -29,7 +79,14 @@ export const auth = cache(async (): Promise<AppSession | null> => {
   // Look up the app user by Supabase Auth ID
   let appUser = await prisma.user.findUnique({
     where: { supabaseAuthId: supabaseUser.id },
-    select: { id: true, email: true, name: true, avatarUrl: true, role: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      avatarUrl: true,
+      role: true,
+      personalTeamId: true,
+    },
   });
 
   // JIT sync: if the Supabase user exists but the app user doesn't yet
@@ -55,6 +112,7 @@ export const auth = cache(async (): Promise<AppSession | null> => {
         name: true,
         avatarUrl: true,
         role: true,
+        personalTeamId: true,
       },
     });
 
@@ -111,8 +169,26 @@ export const auth = cache(async (): Promise<AppSession | null> => {
           name: true,
           avatarUrl: true,
           role: true,
+          personalTeamId: true,
         },
       });
+    }
+  }
+
+  // Ensure every user has a personal teamspace. Idempotent — only writes
+  // when the back-pointer is missing.
+  if (!appUser.personalTeamId) {
+    try {
+      const personalTeamId = await ensurePersonalTeamspace(
+        appUser.id,
+        appUser.name,
+        appUser.personalTeamId,
+      );
+      appUser = { ...appUser, personalTeamId };
+    } catch (err) {
+      // Don't break sign-in if provisioning hits a transient error;
+      // the next request will try again.
+      console.error("[auth] ensurePersonalTeamspace failed", err);
     }
   }
 

@@ -41,6 +41,8 @@ import { TeamDailySection } from "@/components/notes/team-daily-section";
 import { TopbarSlot } from "@/components/layout/topbar-slot";
 import { MoveNoteDialog } from "@/components/notes/move-note-dialog";
 import { NotesViewControls } from "@/components/notes/notes-view-controls";
+import { TeamspaceSwitcher } from "@/components/notes/teamspace-switcher";
+import { useNotesRealtime } from "@/lib/notes/use-realtime";
 import { NotesCardsView } from "@/components/notes/views/notes-cards-view";
 import { NotesListView } from "@/components/notes/views/notes-list-view";
 import { NotesGalleryView } from "@/components/notes/views/notes-gallery-view";
@@ -401,6 +403,21 @@ export function NotesPageClient() {
   // Server source of truth for view preferences. localStorage paints first
   // (synchronous read on mount); this query reconciles to the server value.
   const { data: serverPref } = trpc.userNotePreference.get.useQuery();
+  const { data: meRow } = trpc.user.me.useQuery(undefined, {
+    staleTime: 5 * 60_000,
+  });
+  const { data: teamspaceRows } = trpc.team.listMyTeamspaces.useQuery(
+    undefined,
+    { staleTime: 60_000 },
+  );
+
+  // Realtime: listen for teammate edits / new comments / new mentions across
+  // every teamspace the user belongs to. Falls open silently when Supabase
+  // env vars aren't configured.
+  useNotesRealtime({
+    userId: meRow?.id ?? null,
+    teamspaceIds: (teamspaceRows ?? []).map((t) => t.id),
+  });
   const updatePref = trpc.userNotePreference.update.useMutation({
     onSuccess: () => {
       void utils.userNotePreference.get.invalidate();
@@ -420,11 +437,13 @@ export function NotesPageClient() {
       viewMode: (serverPref.viewMode as ViewMode) ?? DEFAULT_VIEW_PREFS.viewMode,
       sortBy: (serverPref.sortBy as SortBy) ?? DEFAULT_VIEW_PREFS.sortBy,
       groupBy: (serverPref.groupBy as GroupBy) ?? DEFAULT_VIEW_PREFS.groupBy,
+      activeTeamspaceId: serverPref.activeTeamspaceId ?? null,
     };
     setViewPrefs((prev) =>
       prev.viewMode === next.viewMode &&
       prev.sortBy === next.sortBy &&
-      prev.groupBy === next.groupBy
+      prev.groupBy === next.groupBy &&
+      prev.activeTeamspaceId === next.activeTeamspaceId
         ? prev
         : next,
     );
@@ -484,33 +503,40 @@ export function NotesPageClient() {
     });
   }, [activeId, notes]);
 
+  // Apply the active-teamspace lens. `null` = show notes from every teamspace.
+  const visibleNotes = useMemo<ListNote[]>(() => {
+    if (!notes) return [];
+    if (!viewPrefs.activeTeamspaceId) return notes;
+    return notes.filter((n) => n.teamId === viewPrefs.activeTeamspaceId);
+  }, [notes, viewPrefs.activeTeamspaceId]);
+
   const grouped = useMemo(
-    () => (notes ? groupByParent(notes) : new Map()),
-    [notes],
+    () => (visibleNotes.length ? groupByParent(visibleNotes) : new Map()),
+    [visibleNotes],
   );
 
   const recentNotes = useMemo<ListNote[]>(() => {
-    if (!notes) return [];
-    return [...notes]
+    if (!visibleNotes.length) return [];
+    return [...visibleNotes]
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
       .slice(0, 5);
-  }, [notes]);
+  }, [visibleNotes]);
 
   // Sorted + grouped main-pane notes for the selected view mode.
   const mainNoteGroups = useMemo(() => {
-    if (!notes) return [];
-    const sorted = sortNotes(notes, viewPrefs.sortBy);
+    if (!visibleNotes.length) return [];
+    const sorted = sortNotes(visibleNotes, viewPrefs.sortBy);
     const projectNames = new Map<string, string>();
-    for (const n of notes) {
+    for (const n of visibleNotes) {
       if (n.linkedProject) {
         projectNames.set(n.linkedProject.id, n.linkedProject.name);
       }
     }
     return groupNotes(sorted, viewPrefs.groupBy, projectNames);
-  }, [notes, viewPrefs.sortBy, viewPrefs.groupBy]);
+  }, [visibleNotes, viewPrefs.sortBy, viewPrefs.groupBy]);
 
   const createNote = trpc.note.create.useMutation({
     onSuccess: (row, vars) => {
@@ -555,17 +581,26 @@ export function NotesPageClient() {
       title: "Untitled",
       blocks: getEmptyNoteBlocks(),
       contentText: "",
+      // Land the new note in the active teamspace lens. When no lens is
+      // selected ("All teamspaces") the server defaults to the user's
+      // PERSONAL teamspace.
+      ...(viewPrefs.activeTeamspaceId
+        ? { teamId: viewPrefs.activeTeamspaceId }
+        : {}),
     });
   }
 
   function quickCreateSubnote(parentId: string) {
     if (createNote.isPending) return;
     setCreatingChildOf(parentId);
+    // Subnotes inherit teamspace from their parent — find it in cache.
+    const parentNote = visibleNotes.find((n) => n.id === parentId);
     createNote.mutate({
       title: "Untitled",
       blocks: getEmptyNoteBlocks(),
       contentText: "",
       parentId,
+      ...(parentNote?.teamId ? { teamId: parentNote.teamId } : {}),
     });
   }
 
@@ -587,6 +622,12 @@ export function NotesPageClient() {
       </TopbarSlot>
 
       <aside className="w-full shrink-0 space-y-4 lg:w-72">
+        <TeamspaceSwitcher
+          value={viewPrefs.activeTeamspaceId}
+          onChange={(next) => applyViewPrefs({ activeTeamspaceId: next })}
+          disabled={updatePref.isPending}
+        />
+
         <h2 className="text-sm font-semibold text-muted-foreground">Pages</h2>
 
         <form onSubmit={applyFilters} className="flex flex-col gap-2">
@@ -657,7 +698,7 @@ export function NotesPageClient() {
           </p>
         )}
 
-        {!isLoading && notes && notes.length > 0 && (
+        {!isLoading && visibleNotes.length > 0 && (
           <nav aria-label="Note pages" className="rounded-lg border bg-card p-2">
             <NoteTreeRows
               grouped={grouped}
@@ -764,7 +805,14 @@ export function NotesPageClient() {
           if (!o) setPendingMove(null);
         }}
         note={pendingMove}
-        allNotes={notes ?? []}
+        // Restrict the parent picker to notes in the same teamspace as the
+        // note being moved — cross-teamspace moves go through the
+        // "Move to teamspace…" tab inside the dialog.
+        allNotes={
+          pendingMove
+            ? (notes ?? []).filter((n) => n.teamId === pendingMove.teamId)
+            : (notes ?? [])
+        }
       />
 
       {/* Delete-confirmation dialog */}

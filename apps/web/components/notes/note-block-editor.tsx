@@ -15,8 +15,15 @@ import { trpc } from "@/trpc/client";
 import { normalizeStoredBlocks } from "@/lib/note-blocks";
 import { Button } from "@omnitool/ui/components/button";
 import { Input } from "@omnitool/ui/components/input";
-import { ChevronUp, History } from "lucide-react";
+import {
+  ChevronUp,
+  History,
+  MessageSquare,
+  User as UserIcon,
+  Users,
+} from "lucide-react";
 import { NoteEmojiPicker } from "./note-emoji-picker";
+import { NoteCommentsPanel } from "./note-comments-panel";
 import Link from "next/link";
 import { useTheme } from "next-themes";
 import type { inferRouterOutputs } from "@trpc/server";
@@ -37,7 +44,16 @@ type NoteDetail = inferRouterOutputs<AppRouter>["note"]["getById"];
 
 const AUTOSAVE_MS = 1000;
 
-export function NoteBlockEditor({ note }: { note: NoteDetail }) {
+export function NoteBlockEditor({
+  note,
+  focusBlockId,
+}: {
+  note: NoteDetail;
+  /** When provided, the editor will attempt to scroll to + place the cursor
+   * inside this BlockNote block id once the document is mounted. Used by the
+   * mention jump-through path on `/notes/[id]?mention=...`. */
+  focusBlockId?: string | null;
+}) {
   const { resolvedTheme } = useTheme();
   const bnTheme = resolvedTheme === "dark" ? "dark" : "light";
 
@@ -45,6 +61,7 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
   const [emoji, setEmoji] = useState<string | null>(note.emoji ?? null);
   const [status, setStatus] = useState<"saved" | "saving" | "dirty">("saved");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef({ title: note.title, dirty: false });
 
@@ -58,22 +75,66 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
     [note.id],
   );
 
+  // Scroll to + focus the requested block on mount if a `focusBlockId` was
+  // passed in (e.g. via the inbox jump-through). BlockNote's
+  // `setTextCursorPosition` accepts a block id and moves the cursor there.
+  useEffect(() => {
+    if (!focusBlockId) return;
+    // Defer until BlockNote has had time to render its DOM.
+    const t = setTimeout(() => {
+      try {
+        const block = editor.getBlock(focusBlockId);
+        if (block) {
+          editor.setTextCursorPosition(focusBlockId, "end");
+          // Best-effort scroll — BlockNote owns the DOM nodes.
+          if (typeof document !== "undefined") {
+            const el = document.querySelector(
+              `[data-id="${focusBlockId}"]`,
+            ) as HTMLElement | null;
+            el?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }
+      } catch (err) {
+        console.error("[note] focusBlockId scroll failed", err);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [editor, focusBlockId]);
+
+  // Persist a `NoteMention` row when an @-person is inserted. Fire-and-forget
+  // — the editor never waits on the mutation, so a failure here doesn't block
+  // typing. The server is idempotent: same (note, block, mentionedUser) with
+  // an unread mention reuses the existing row.
+  const createMention = trpc.noteMention.create.useMutation();
+
   // Listen for embed-picker insert events and insert into editor.
   useEffect(() => {
     const onInsert = (e: Event) => {
       const ce = e as EmbedInsertEvent;
       const cursor = editor.getTextCursorPosition();
       if (ce.detail.kind === "person") {
+        const userId = (ce.detail.props.userId as string) ?? "";
+        const blockId = cursor.block.id;
         editor.insertInlineContent([
           {
             type: "person",
             props: {
-              userId: (ce.detail.props.userId as string) ?? "",
+              userId,
               name: (ce.detail.props.name as string) ?? "",
             },
           },
           " ",
         ]);
+        if (userId) {
+          createMention.mutate(
+            { noteId: note.id, blockId, mentionedUserId: userId },
+            {
+              onError: (err) => {
+                console.error("[note] mention persist failed", err);
+              },
+            },
+          );
+        }
         return;
       }
       if (ce.detail.kind === "noteMention") {
@@ -106,7 +167,7 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
     };
     window.addEventListener("omnitool:insert-embed", onInsert);
     return () => window.removeEventListener("omnitool:insert-embed", onInsert);
-  }, [editor]);
+  }, [editor, note.id, createMention]);
 
   const updateNote = trpc.note.update.useMutation({
     onSuccess: () => {
@@ -237,8 +298,30 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
         />
       </div>
 
-      {/* Meta strip: linked entity + tags + status + history */}
+      {/* Meta strip: teamspace + linked entity + tags + status + history */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b pb-3">
+        {note.team && (
+          <span
+            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
+            title={
+              note.team.kind === "PERSONAL"
+                ? "Lives in your personal teamspace"
+                : `Lives in the ${note.team.name} teamspace`
+            }
+          >
+            {note.team.kind === "PERSONAL" ? (
+              <UserIcon className="h-3 w-3" />
+            ) : (
+              <Users className="h-3 w-3" />
+            )}
+            <span className="font-medium text-foreground">
+              {note.team.name}
+            </span>
+            {note.team.kind === "PERSONAL" && (
+              <span className="opacity-70">· Personal</span>
+            )}
+          </span>
+        )}
         <LinkedEntityPill note={note} />
         <NoteTagEditor note={note} />
         <span
@@ -247,6 +330,10 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
         >
           {statusLabel}
         </span>
+        <CommentsTrigger
+          noteId={note.id}
+          onClick={() => setCommentsOpen(true)}
+        />
         <Button
           type="button"
           variant="ghost"
@@ -291,6 +378,11 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
 
       <NoteRelationsPanel note={note} />
 
+      <NoteCommentsPanelWithUser
+        noteId={note.id}
+        open={commentsOpen}
+        onOpenChange={setCommentsOpen}
+      />
       <EmbedPicker />
       <NoteHistorySheet
         noteId={note.id}
@@ -298,5 +390,66 @@ export function NoteBlockEditor({ note }: { note: NoteDetail }) {
         onOpenChange={setHistoryOpen}
       />
     </div>
+  );
+}
+
+/**
+ * Compact comments-button rendered in the meta strip. Shows the comment count
+ * + an unread dot when the caller has unread teammate comments.
+ */
+function CommentsTrigger({
+  noteId,
+  onClick,
+}: {
+  noteId: string;
+  onClick: () => void;
+}) {
+  const unreadQuery = trpc.noteComment.unreadCountForNote.useQuery(
+    { noteId },
+    { staleTime: 15_000 },
+  );
+  const unread = unreadQuery.data ?? 0;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="relative h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+      onClick={onClick}
+      title={unread > 0 ? `${unread} new comment${unread === 1 ? "" : "s"}` : "Comments"}
+    >
+      <MessageSquare className="mr-1 h-3.5 w-3.5" />
+      Comments
+      {unread > 0 ? (
+        <span className="ml-1 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      ) : null}
+    </Button>
+  );
+}
+
+/**
+ * Wrapper that fetches the current user id (needed for Edit/Delete affordances
+ * inside the comments panel). Kept inline so the editor file stays the single
+ * source of truth for comments wiring.
+ */
+function NoteCommentsPanelWithUser({
+  noteId,
+  open,
+  onOpenChange,
+}: {
+  noteId: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const meQuery = trpc.user.me.useQuery(undefined, { staleTime: 5 * 60_000 });
+  return (
+    <NoteCommentsPanel
+      noteId={noteId}
+      open={open}
+      onOpenChange={onOpenChange}
+      currentUserId={meQuery.data?.id ?? null}
+    />
   );
 }

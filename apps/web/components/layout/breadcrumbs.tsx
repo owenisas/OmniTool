@@ -21,6 +21,7 @@ const LABELS: Record<string, string> = {
   notes: "Notes",
   trash: "Trash",
   history: "History",
+  inbox: "Inbox",
   performance: "Performance",
   "team-activity": "Team Activity",
   agents: "AI Agents",
@@ -69,6 +70,10 @@ export function Breadcrumbs() {
     { noteId: noteId ?? "" },
     { enabled: Boolean(noteId), staleTime: 30_000 },
   );
+  const teamspaceQuery = trpc.note.getTeamspaceForNote.useQuery(
+    { noteId: noteId ?? "" },
+    { enabled: Boolean(noteId), staleTime: 60_000 },
+  );
   const titleById = new Map<string, string>();
   for (const a of ancestorQuery.data ?? []) {
     titleById.set(a.id, a.title || "Untitled");
@@ -80,6 +85,21 @@ export function Breadcrumbs() {
   for (let i = 0; i < segments.length; i += 1) {
     const seg = segments[i]!;
     const href = "/" + segments.slice(0, i + 1).join("/");
+
+    if (isNoteRoute && i === 0) {
+      // "Notes" crumb itself.
+      crumbs.push({ label: "Notes", href });
+      // Append the teamspace name immediately after Notes so a glance shows
+      // which teamspace the user is in.
+      const ts = teamspaceQuery.data;
+      if (ts) {
+        crumbs.push({
+          label: ts.kind === "PERSONAL" ? `${ts.name} (Personal)` : ts.name,
+          href: "/notes",
+        });
+      }
+      continue;
+    }
 
     if (isNoteRoute && i === 1) {
       // Inject the ancestor chain (excluding the leaf, which is appended below).
