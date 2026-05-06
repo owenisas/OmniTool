@@ -12,7 +12,8 @@ import {
 import { Button } from "@omnitool/ui/components/button";
 import { Input } from "@omnitool/ui/components/input";
 import { Label } from "@omnitool/ui/components/label";
-import { Loader2, CheckCircle } from "lucide-react";
+import { Loader2, CheckCircle, LogOut } from "lucide-react";
+import { Separator } from "@omnitool/ui/components/separator";
 
 export default function SecuritySettingsPage() {
   const [newPassword, setNewPassword] = useState("");
@@ -20,6 +21,15 @@ export default function SecuritySettingsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -125,6 +135,36 @@ export default function SecuritySettingsPage() {
               )}
             </Button>
           </form>
+        </CardContent>
+      </Card>
+
+      <Separator />
+
+      <Card className="max-w-lg">
+        <CardHeader>
+          <CardTitle>Session</CardTitle>
+          <CardDescription>
+            Sign out of your account on this device.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            variant="outline"
+            onClick={handleSignOut}
+            disabled={signingOut}
+          >
+            {signingOut ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Signing out…
+              </>
+            ) : (
+              <>
+                <LogOut className="mr-2 h-4 w-4" />
+                Sign out
+              </>
+            )}
+          </Button>
         </CardContent>
       </Card>
     </div>

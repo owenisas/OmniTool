@@ -1,9 +1,10 @@
+import { cache } from "react";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { auth } from "@/lib/auth";
 import { prisma } from "@omnitool/database";
 import { getActiveTeamFromCookie } from "@/lib/team-cookie";
-import { noteMutationLimiter } from "@/lib/rate-limit";
+import { noteMutationLimiter, noteReadLimiter } from "@/lib/rate-limit";
 
 export const createTRPCContext = async (opts: { headers: Headers }) => {
   const session = await auth();
@@ -21,22 +22,24 @@ export const createTRPCContext = async (opts: { headers: Headers }) => {
 /**
  * Load every teamspace (PERSONAL + TEAM) the current user can access. Used
  * by procedures that read or mutate teamspace-scoped resources (notes, tags,
- * comments). The result is fresh per-request — there is no cache layer here
- * because membership churn (invites, leave) needs to reflect immediately.
+ * comments). Wrapped in React `cache()` so multiple note procedures within the
+ * same request share one DB query instead of repeating per procedure call.
  *
  * Returns the user's TeamMember teamIds. The user's PERSONAL team is always
  * present in the result because `auth()` provisions one + a TeamMember row.
  */
-export async function loadTeamspaceIds(
-  prismaClient: typeof prisma,
-  userId: string,
-): Promise<string[]> {
-  const memberships = await prismaClient.teamMember.findMany({
-    where: { userId },
-    select: { teamId: true },
-  });
-  return memberships.map((m) => m.teamId);
-}
+export const loadTeamspaceIds = cache(
+  async (
+    prismaClient: typeof prisma,
+    userId: string,
+  ): Promise<string[]> => {
+    const memberships = await prismaClient.teamMember.findMany({
+      where: { userId },
+      select: { teamId: true },
+    });
+    return memberships.map((m) => m.teamId);
+  },
+);
 
 const t = initTRPC.context<typeof createTRPCContext>().create({
   transformer: superjson,
@@ -59,12 +62,25 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
 
 /**
  * Notes-domain read procedure: protected + loads `ctx.teamspaceIds` (the set
- * of teamspace ids the current user belongs to). Use this in place of
- * `protectedProcedure` for any query that reads notes/tags/comments so
- * authorization filters can be uniformly written as
+ * of teamspace ids the current user belongs to) + per-user read rate limit.
+ * Use this in place of `protectedProcedure` for any query that reads
+ * notes/tags/comments so authorization filters can be uniformly written as
  * `teamId: { in: ctx.teamspaceIds }`.
  */
 export const noteProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  // Rate limit note reads: 600 req/min per user
+  if (noteReadLimiter) {
+    const { success, reset } = await noteReadLimiter.limit(
+      `user:${ctx.userId}`,
+    );
+    if (!success) {
+      const retryAfterSec = Math.max(1, Math.ceil((reset - Date.now()) / 1000));
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `Too many read requests — try again in ${retryAfterSec}s.`,
+      });
+    }
+  }
   const teamspaceIds = await loadTeamspaceIds(ctx.prisma, ctx.userId);
   return next({ ctx: { ...ctx, teamspaceIds } });
 });

@@ -171,6 +171,9 @@ model Task {
   labels      Label[]     @relation("TaskLabels")
   comments    Comment[]
 
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([creatorId])
   @@map("tasks")
 }
 
@@ -198,6 +201,9 @@ model Issue {
   labels   Label[]  @relation("IssueLabels")
   comments Comment[]
 
+  @@index([projectId])
+  @@index([assigneeId])
+  @@index([reporterId])
   @@map("issues")
 }
 
@@ -243,6 +249,8 @@ model Note {
   @@index([authorId, parentId, position])
   @@index([teamId, parentId, position])
   @@index([teamId, deletedAt])
+  @@index([teamId])
+  @@index([authorId])
   @@index([notionPageId])
   @@index([linkedProjectId])
   @@index([authorId, deletedAt])
@@ -373,6 +381,8 @@ model TimeEntry {
   user User  @relation(fields: [userId], references: [id])
   task Task? @relation(fields: [taskId], references: [id])
 
+  @@index([userId])
+  @@index([taskId])
   @@map("time_entries")
 }
 
@@ -388,6 +398,8 @@ model PerformanceMetric {
 
   project Project @relation(fields: [projectId], references: [id])
 
+  @@index([projectId])
+  @@index([projectId, metricType, periodStart])
   @@map("performance_metrics")
 }
 
@@ -406,6 +418,8 @@ model AIConversation {
   note     Note?       @relation(fields: [noteId], references: [id], onDelete: SetNull)
   messages AIMessage[]
 
+  @@index([noteId])
+  @@index([userId])
   @@map("ai_conversations")
 }
 
@@ -471,6 +485,9 @@ model Comment {
   task   Task?  @relation(fields: [taskId], references: [id], onDelete: Cascade)
   issue  Issue? @relation(fields: [issueId], references: [id], onDelete: Cascade)
 
+  @@index([taskId])
+  @@index([issueId])
+  @@index([authorId])
   @@map("comments")
 }
 

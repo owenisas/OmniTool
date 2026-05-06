@@ -5,17 +5,18 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard,
+  Inbox as InboxIcon,
   CheckSquare,
   Bug,
   StickyNote,
   Menu,
 } from "lucide-react";
+import { trpc } from "@/trpc/client";
 import { navigationActive } from "./sidebar";
 import { useSidebar } from "./sidebar-context";
 
 const tabs = [
-  { name: "Home", href: "/", icon: LayoutDashboard },
+  { name: "Inbox", href: "/inbox", icon: InboxIcon },
   { name: "Tasks", href: "/tasks", icon: CheckSquare },
   { name: "Issues", href: "/issues", icon: Bug },
   { name: "Notes", href: "/notes", icon: StickyNote },
@@ -26,6 +27,11 @@ export function MobileNav() {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const { open } = useSidebar();
+
+  const inboxUnreadQuery = trpc.noteMention.unreadCount.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+  const inboxUnread = inboxUnreadQuery.data ?? 0;
 
   function navigate(href: string) {
     startTransition(() => {
@@ -62,6 +68,10 @@ export function MobileNav() {
             {/* Active indicator dot */}
             {isActive && (
               <span className="absolute top-1 h-1 w-1 rounded-full bg-primary" />
+            )}
+            {/* Inbox unread badge */}
+            {tab.href === "/inbox" && inboxUnread > 0 && (
+              <span className="absolute right-1/4 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-card" />
             )}
             <tab.icon
               className={cn(

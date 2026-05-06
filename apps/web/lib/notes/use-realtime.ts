@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { trpc } from "@/trpc/client";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
@@ -28,7 +28,9 @@ interface RealtimeOptions {
  *
  * One channel per `(userId, teamspaceIds)` set; tears down on change/unmount.
  *
- * NB: invalidations are cheap and React Query dedupes; we don't debounce.
+ * Debounced: rapid-fire events (e.g. autosave) coalesce into a single
+ * invalidation per 2-second window to avoid hammering the cache on every
+ * keystroke-triggered save.
  */
 export function useNotesRealtime({
   userId,
@@ -41,6 +43,10 @@ export function useNotesRealtime({
   // Keep teamspace ids stable for the dependency array via JSON.stringify;
   // the array identity changes on every render of the parent.
   const teamspacesKey = teamspaceIds.slice().sort().join(",");
+
+  // Debounce timers — coalesce rapid invalidations (e.g. autosave writes)
+  const listTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const detailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (disabled) return;
@@ -56,6 +62,8 @@ export function useNotesRealtime({
 
     const supabase = createSupabaseBrowserClient();
     const teamspaceSet = new Set(teamspaceIds);
+
+    const DEBOUNCE_MS = 2_000;
 
     type PgRow = Record<string, unknown> | null | undefined;
     type PgPayload = {
@@ -82,6 +90,24 @@ export function useNotesRealtime({
       return typeof v === "string" ? v : null;
     }
 
+    /** Debounced note.list invalidation — coalesces rapid autosave events. */
+    function debouncedListInvalidate() {
+      if (listTimerRef.current) clearTimeout(listTimerRef.current);
+      listTimerRef.current = setTimeout(() => {
+        void utils.note.list.invalidate();
+        listTimerRef.current = null;
+      }, DEBOUNCE_MS);
+    }
+
+    /** Debounced note.getById invalidation for the active note. */
+    function debouncedDetailInvalidate(noteId: string) {
+      if (detailTimerRef.current) clearTimeout(detailTimerRef.current);
+      detailTimerRef.current = setTimeout(() => {
+        void utils.note.getById.invalidate({ id: noteId });
+        detailTimerRef.current = null;
+      }, DEBOUNCE_MS);
+    }
+
     const channel = supabase
       .channel(`notes:${userId}`)
       // Notes themselves — list + getById.
@@ -93,10 +119,10 @@ export function useNotesRealtime({
         (payload: PgPayload) => {
           const teamId = pickTeamId(payload);
           if (!teamId || !teamspaceSet.has(teamId)) return;
-          void utils.note.list.invalidate();
+          debouncedListInvalidate();
           const noteId = pickNoteId(payload);
           if (noteId && activeNoteId && noteId === activeNoteId) {
-            void utils.note.getById.invalidate({ id: noteId });
+            debouncedDetailInvalidate(noteId);
           }
         },
       )
@@ -130,6 +156,8 @@ export function useNotesRealtime({
       .subscribe();
 
     return () => {
+      if (listTimerRef.current) clearTimeout(listTimerRef.current);
+      if (detailTimerRef.current) clearTimeout(detailTimerRef.current);
       void supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

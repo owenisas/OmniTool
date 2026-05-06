@@ -403,13 +403,22 @@ const githubRouter = createTRPCRouter({
           input.selectedRepoIds.includes(r.id)
         );
 
-        for (const repo of selectedRepos) {
-          // Skip if already imported
-          const existing = await ctx.prisma.project.findFirst({
-            where: { githubRepoId: repo.id },
-          });
-          if (existing) continue;
+        // Batch-check which repos are already imported (single query)
+        const existingProjects = await ctx.prisma.project.findMany({
+          where: {
+            githubRepoId: { in: selectedRepos.map((r) => r.id) },
+          },
+          select: { githubRepoId: true },
+        });
+        const alreadyImportedIds = new Set(
+          existingProjects.map((p) => p.githubRepoId),
+        );
 
+        const reposToImport = selectedRepos.filter(
+          (r) => !alreadyImportedIds.has(r.id),
+        );
+
+        for (const repo of reposToImport) {
           const projectSlug = await generateUniqueSlug(
             ctx.prisma,
             repo.name,
@@ -431,7 +440,7 @@ const githubRouter = createTRPCRouter({
         }
       }
 
-      // 3b. Auto-register webhooks on imported repos
+      // 3b. Auto-register webhooks on imported repos (parallelized)
       const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
       const appUrl = process.env.AUTH_URL || process.env.NEXT_PUBLIC_OMNITOOL_WEB_URL;
       if (webhookSecret && appUrl && input.selectedRepoIds.length > 0) {
@@ -443,44 +452,70 @@ const githubRouter = createTRPCRouter({
           input.selectedRepoIds.includes(r.id)
         );
 
-        for (const repo of selectedForHooks) {
-          try {
-            const [owner, repoName] = repo.fullName.split("/");
-            if (owner && repoName) {
-              await createRepoWebhook(
-                octokit,
-                owner,
-                repoName,
-                webhookUrl,
-                webhookSecret
-              );
+        // Register webhooks in parallel (GitHub API calls are independent)
+        await Promise.allSettled(
+          selectedForHooks.map(async (repo) => {
+            try {
+              const [owner, repoName] = repo.fullName.split("/");
+              if (owner && repoName) {
+                await createRepoWebhook(
+                  octokit,
+                  owner,
+                  repoName,
+                  webhookUrl,
+                  webhookSecret
+                );
+              }
+            } catch (err: any) {
+              // 422 = webhook already exists on this repo — that's fine
+              if (err.status !== 422) {
+                console.error(
+                  `[GitHub Import] Failed to register webhook for ${repo.fullName}:`,
+                  err.message
+                );
+              }
             }
-          } catch (err: any) {
-            // 422 = webhook already exists on this repo — that's fine
-            if (err.status !== 422) {
-              console.error(
-                `[GitHub Import] Failed to register webhook for ${repo.fullName}:`,
-                err.message
-              );
-            }
-          }
-        }
+          }),
+        );
       }
 
       // 4. Import members (skip for personal repos)
       if (input.importMembers && !input.isPersonal) {
         const orgMembers = await listOrgMembers(octokit, input.orgLogin);
 
+        // Batch-resolve existing users by GitHub ID/login (single query)
+        const existingUsers = await ctx.prisma.user.findMany({
+          where: {
+            OR: [
+              { githubUserId: { in: orgMembers.map((m) => m.id) } },
+              { githubLogin: { in: orgMembers.map((m) => m.login) } },
+            ],
+          },
+        });
+        const userByGithubId = new Map(
+          existingUsers
+            .filter((u) => u.githubUserId)
+            .map((u) => [u.githubUserId!, u]),
+        );
+        const userByLogin = new Map(
+          existingUsers
+            .filter((u) => u.githubLogin)
+            .map((u) => [u.githubLogin!, u]),
+        );
+
+        // Batch-check existing team memberships
+        const existingMemberships = await ctx.prisma.teamMember.findMany({
+          where: {
+            teamId: team.id,
+            userId: { in: existingUsers.map((u) => u.id) },
+          },
+          select: { userId: true },
+        });
+        const alreadyMembers = new Set(existingMemberships.map((m) => m.userId));
+
         for (const member of orgMembers) {
-          // Try to find existing user
-          let user = await ctx.prisma.user.findFirst({
-            where: {
-              OR: [
-                { githubUserId: member.id },
-                { githubLogin: member.login },
-              ],
-            },
-          });
+          let user =
+            userByGithubId.get(member.id) ?? userByLogin.get(member.login) ?? null;
 
           if (!user) {
             // Create placeholder user
@@ -531,14 +566,7 @@ const githubRouter = createTRPCRouter({
           }
 
           // Add to team if not already a member
-          const existingTeamMember =
-            await ctx.prisma.teamMember.findUnique({
-              where: {
-                userId_teamId: { userId: user.id, teamId: team.id },
-              },
-            });
-
-          if (!existingTeamMember) {
+          if (!alreadyMembers.has(user.id)) {
             await ctx.prisma.teamMember.create({
               data: {
                 userId: user.id,

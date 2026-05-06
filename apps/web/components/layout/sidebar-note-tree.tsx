@@ -37,6 +37,7 @@ function TreeRow({
   onCreateChild,
   creatingChildOf,
 }: RowProps) {
+  const utils = trpc.useUtils();
   const children = grouped.get(note.id) ?? [];
   const hasChildren = children.length > 0;
   const isExpanded = expanded.has(note.id);
@@ -73,6 +74,13 @@ function TreeRow({
         <Link
           href={`/notes/${note.id}`}
           prefetch={false}
+          onMouseEnter={() => {
+            // Prefetch note data on hover so navigation feels instant
+            void utils.note.getById.ensureData(
+              { id: note.id },
+              { staleTime: 30_000 },
+            );
+          }}
           className={cn(
             "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs",
             isActive ? "font-medium text-accent-foreground" : "text-muted-foreground",
@@ -138,7 +146,7 @@ export function SidebarNoteTree({
   const utils = trpc.useUtils();
 
   const { data: notes, isLoading } = trpc.note.list.useQuery(undefined, {
-    staleTime: 5_000,
+    staleTime: 30_000,
   });
 
   const grouped = useMemo<Map<string | null, TreeNote[]>>(

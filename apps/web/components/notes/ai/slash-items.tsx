@@ -10,7 +10,16 @@ import type {
   InlineContentSchema,
   StyleSchema,
 } from "@blocknote/core";
-import { AtSign, FolderKanban, Hash, ListTodo, Sparkles, StickyNote, Sun } from "lucide-react";
+import {
+  AtSign,
+  FilePlus2,
+  FolderKanban,
+  Hash,
+  ListTodo,
+  Sparkles,
+  StickyNote,
+  Sun,
+} from "lucide-react";
 
 /**
  * Returns BlockNote's built-in slash items plus custom OmniTool items:
@@ -102,6 +111,21 @@ export function getNotesSlashItems<
       group: "Embed",
       subtext: "Inline link to another note (creates backlink)",
       icon: <Hash className="h-4 w-4" />,
+    },
+    {
+      title: "Subpage",
+      onItemClick: () => {
+        const blockId = editor.getTextCursorPosition().block.id;
+        window.dispatchEvent(
+          new CustomEvent("omnitool:create-subpage", {
+            detail: { blockId },
+          }),
+        );
+      },
+      aliases: ["subpage", "child", "page", "nested"],
+      group: "Embed",
+      subtext: "Create a new child page nested under this note",
+      icon: <FilePlus2 className="h-4 w-4" />,
     },
     {
       title: "Embed note",

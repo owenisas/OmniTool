@@ -1,16 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@omnitool/ui/components/dialog";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Input } from "@omnitool/ui/components/input";
 import { Button } from "@omnitool/ui/components/button";
 import { Badge } from "@omnitool/ui/components/badge";
+import { X } from "lucide-react";
 import { trpc } from "@/trpc/client";
+import { cn } from "@/lib/utils";
 import { useOptionalNoteEditor } from "../note-editor-context";
 
 export type EmbedPickerKind =
@@ -46,8 +42,103 @@ function todayLocalIso(): string {
   return new Date(d.getTime() - tz * 60_000).toISOString().slice(0, 10);
 }
 
+interface AnchorRect {
+  top: number;
+  left: number;
+}
+
+interface CursorPoint {
+  x: number;
+  y: number;
+  bottom: number;
+}
+
+/**
+ * Snapshot the current text-caret position. Mirrors where BlockNote's slash
+ * suggestion menu was floating — so the picker opens "in place of" the slash
+ * dropdown instead of jumping to the block's left edge.
+ */
+function captureCursorPoint(): CursorPoint | null {
+  if (typeof window === "undefined") return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const range = sel.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  // Empty range (caret with no selection) sometimes returns 0,0,0,0 — fall
+  // back to the start container's parent rect in that case.
+  if (rect.width === 0 && rect.height === 0 && rect.top === 0) {
+    const node = range.startContainer;
+    const el =
+      node.nodeType === Node.ELEMENT_NODE
+        ? (node as HTMLElement)
+        : (node.parentElement as HTMLElement | null);
+    if (!el) return null;
+    const parentRect = el.getBoundingClientRect();
+    return {
+      x: parentRect.left,
+      y: parentRect.top,
+      bottom: parentRect.bottom,
+    };
+  }
+  return { x: rect.left, y: rect.top, bottom: rect.bottom };
+}
+
+/**
+ * Compute floating-panel position anchored to the cursor (same anchor as the
+ * slash menu). Falls back to the block's DOM rect, then to viewport-centered.
+ */
+function computePosition(
+  cursor: CursorPoint | null,
+  blockId: string | null,
+  width: number,
+): AnchorRect {
+  if (typeof window === "undefined") return { top: 80, left: 80 };
+  const padding = 12;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  const estimatedHeight = 360;
+
+  // Primary: cursor rect (matches slash-menu anchor exactly).
+  if (cursor) {
+    let left = cursor.x;
+    if (left + width + padding > viewportW) {
+      left = Math.max(padding, viewportW - width - padding);
+    }
+    let top = cursor.bottom + 4;
+    if (top + estimatedHeight > viewportH) {
+      top = Math.max(padding, cursor.y - estimatedHeight - 4);
+    }
+    return { top, left };
+  }
+
+  // Secondary: block element rect (when caret is unavailable, e.g. focus
+  // already moved before the event handler captured the selection).
+  if (blockId) {
+    const el = document.querySelector(
+      `[data-id="${blockId}"]`,
+    ) as HTMLElement | null;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      let left = rect.left;
+      if (left + width + padding > viewportW) {
+        left = Math.max(padding, viewportW - width - padding);
+      }
+      let top = rect.bottom + 4;
+      if (top + estimatedHeight > viewportH) {
+        top = Math.max(padding, rect.top - estimatedHeight - 4);
+      }
+      return { top, left };
+    }
+  }
+  return {
+    top: padding + 60,
+    left: Math.max(padding, viewportW / 2 - width / 2),
+  };
+}
+
 export function EmbedPicker() {
   const [kind, setKind] = useState<EmbedPickerKind | null>(null);
+  const [blockId, setBlockId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   // Per-kind selection state
   const [taskProjectId, setTaskProjectId] = useState("");
@@ -56,10 +147,22 @@ export function EmbedPicker() {
 
   const [date, setDate] = useState(todayLocalIso());
 
+  // Anchor position is computed once on open from the cursor rect (captured
+  // synchronously inside the event handler so we anchor to where the slash
+  // menu was, not to wherever focus drifts after the menu closes).
+  const [anchor, setAnchor] = useState<AnchorRect | null>(null);
+  const cursorPointRef = useRef<CursorPoint | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const onOpen = (e: Event) => {
       const ce = e as EmbedPickerEvent;
+      // Snapshot the caret rect BEFORE React re-renders / focus moves to the
+      // picker — this is the only reliable way to keep the anchor identical
+      // to the slash menu position.
+      cursorPointRef.current = captureCursorPoint();
       setKind(ce.detail.kind);
+      setBlockId(ce.detail.blockId ?? null);
       setSearch("");
       setTaskProjectId("");
       setTaskStatus("OPEN");
@@ -71,7 +174,43 @@ export function EmbedPicker() {
   }, []);
 
   const isOpen = kind !== null;
-  const close = () => setKind(null);
+  const close = () => {
+    setKind(null);
+    setBlockId(null);
+  };
+
+  // Recompute anchor position synchronously after open so the panel doesn't
+  // flash at (0,0) before paint. Width is read from the rendered panel for
+  // accurate right-edge clamping.
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setAnchor(null);
+      return;
+    }
+    const isNotePicker = kind === "noteMention" || kind === "noteEmbed";
+    const width = isNotePicker ? 480 : 360;
+    setAnchor(computePosition(cursorPointRef.current, blockId, width));
+  }, [isOpen, kind, blockId]);
+
+  // Click-outside + Escape to dismiss. Click-outside is scoped to the panel
+  // so clicks inside (e.g. on inputs) keep the picker open.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    const onPointerDown = (e: MouseEvent) => {
+      if (!panelRef.current) return;
+      if (!panelRef.current.contains(e.target as Node)) close();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("mousedown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mousedown", onPointerDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
 
   const projectsQuery = trpc.project.list.useQuery(undefined, {
     enabled: kind === "projectCard" || kind === "taskList",
@@ -130,25 +269,49 @@ export function EmbedPicker() {
 
   const noteResults = noteSearchQuery.data ?? [];
 
+  if (!isOpen || !anchor) return null;
+
   // Note pickers (mention/embed) need extra room so the snippet preview
-  // doesn't squeeze into ellipses immediately. Other kinds keep the
-  // narrower default modal.
+  // doesn't squeeze into ellipses immediately. Other kinds keep narrow.
   const isNotePicker = kind === "noteMention" || kind === "noteEmbed";
-  const dialogWidth = isNotePicker
-    ? "sm:max-w-xl w-[calc(100vw-2rem)]"
-    : "sm:max-w-md";
+  const widthClass = isNotePicker ? "w-[480px]" : "w-[360px]";
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && close()}>
-      <DialogContent className={`${dialogWidth} overflow-hidden`}>
-        <DialogHeader>
-          <DialogTitle>{kind ? titleByKind[kind] : ""}</DialogTitle>
-        </DialogHeader>
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal={false}
+      style={{
+        position: "fixed",
+        top: anchor.top,
+        left: anchor.left,
+        zIndex: 50,
+      }}
+      className={cn(
+        "rounded-lg border bg-popover text-popover-foreground shadow-lg",
+        "animate-in fade-in-0 zoom-in-95",
+        widthClass,
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+        <span className="text-xs font-semibold text-foreground">
+          {kind ? titleByKind[kind] : ""}
+        </span>
+        <button
+          type="button"
+          onClick={close}
+          className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label="Close picker"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
 
+      <div className="p-3">
         {kind === "taskList" ? (
           <div className="space-y-3">
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
                 Filter
               </label>
               <div className="flex flex-wrap gap-1">
@@ -167,13 +330,14 @@ export function EmbedPicker() {
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
                 Project (optional — empty = my tasks)
               </label>
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search projects…"
+                className="h-8 text-xs"
               />
               <div className="mt-1 max-h-40 overflow-y-auto rounded border">
                 <button
@@ -210,7 +374,7 @@ export function EmbedPicker() {
               </div>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
                 Limit ({taskLimit})
               </label>
               <input
@@ -222,7 +386,7 @@ export function EmbedPicker() {
                 className="w-full"
               />
             </div>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-2 pt-1">
               <Button type="button" variant="outline" size="sm" onClick={close}>
                 Cancel
               </Button>
@@ -246,12 +410,13 @@ export function EmbedPicker() {
         ) : null}
 
         {kind === "projectCard" ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search projects…"
               autoFocus
+              className="h-8 text-xs"
             />
             <div className="max-h-72 overflow-y-auto rounded border">
               {filteredProjects.length === 0 ? (
@@ -276,25 +441,27 @@ export function EmbedPicker() {
         ) : null}
 
         {kind === "dailySummary" ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
                 Date
               </label>
               <Input
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
+                className="h-8 text-xs"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
                 Member
               </label>
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search members…"
+                className="h-8 text-xs"
               />
               <div className="mt-1 max-h-60 overflow-y-auto rounded border">
                 {filteredUsers.length === 0 ? (
@@ -317,12 +484,13 @@ export function EmbedPicker() {
         ) : null}
 
         {kind === "noteMention" || kind === "noteEmbed" ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search notes…"
               autoFocus
+              className="h-8 text-xs"
             />
             <div className="max-h-72 w-full overflow-y-auto overflow-x-hidden rounded border">
               {noteResults.length === 0 ? (
@@ -360,12 +528,13 @@ export function EmbedPicker() {
         ) : null}
 
         {kind === "person" ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search members…"
               autoFocus
+              className="h-8 text-xs"
             />
             <div className="max-h-72 overflow-y-auto rounded border">
               {filteredUsers.length === 0 ? (
@@ -392,7 +561,7 @@ export function EmbedPicker() {
             </div>
           </div>
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

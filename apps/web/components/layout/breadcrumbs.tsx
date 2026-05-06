@@ -74,7 +74,17 @@ export function Breadcrumbs() {
     { noteId: noteId ?? "" },
     { enabled: Boolean(noteId), staleTime: 60_000 },
   );
+  // Fallback title source: `note.list` is already in the React Query cache
+  // (sidebar + /notes page both subscribe). Reading from it lets us render
+  // real titles immediately while `ancestorQuery` is still loading, instead
+  // of flashing the raw id / `#abc123` fallback during navigation.
+  const noteListQuery = trpc.note.list.useQuery(undefined, {
+    staleTime: 5_000,
+  });
   const titleById = new Map<string, string>();
+  for (const n of noteListQuery.data ?? []) {
+    titleById.set(n.id, n.title || "Untitled");
+  }
   for (const a of ancestorQuery.data ?? []) {
     titleById.set(a.id, a.title || "Untitled");
   }
@@ -107,13 +117,16 @@ export function Breadcrumbs() {
       for (let j = 0; j < chain.length - 1; j += 1) {
         const a = chain[j]!;
         crumbs.push({
-          label: a.title || "Untitled",
+          label: a.title || titleById.get(a.id) || "Untitled",
           href: `/notes/${a.id}`,
         });
       }
       const leaf = chain[chain.length - 1];
+      // Resolution order: ancestor chain leaf → cached title from note.list
+      // → prettified id (last-resort `#abc123`).
       crumbs.push({
-        label: leaf?.title || (titleById.get(seg) ?? prettify(seg)),
+        label:
+          leaf?.title || titleById.get(seg) || prettify(seg),
         href,
       });
       continue;

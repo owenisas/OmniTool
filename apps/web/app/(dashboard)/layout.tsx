@@ -7,6 +7,7 @@ import { MobileNav } from "@/components/layout/mobile-nav";
 import { MobileDrawer } from "@/components/layout/mobile-drawer";
 import { InvitationBanner } from "@/components/layout/invitation-banner";
 import { CommandPaletteProvider } from "@/components/command-palette/command-palette-provider";
+import { PageTransition } from "@/components/layout/page-transition";
 
 export default async function DashboardLayout({
   children,
@@ -25,7 +26,7 @@ export default async function DashboardLayout({
             <Topbar />
             <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
               <InvitationBanner />
-              {children}
+              <PageTransition>{children}</PageTransition>
             </main>
           </div>
           <MobileNav />

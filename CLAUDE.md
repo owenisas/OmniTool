@@ -36,6 +36,29 @@ supabase/                 # Supabase config.toml + migrations (managed via `supa
 
 When the user says "run" or "run the app", always run `pnpm build:desktop` (production desktop build). This builds the standalone Next.js server, bundles it with the Node.js sidecar, and produces the distributable app. Dev mode (`pnpm dev:desktop`) is too slow for testing — it compiles on-demand via Turbopack. Always use the production build to confirm the real user experience.
 
+### `pnpm ship:desktop` — full rebuild + reinstall + relaunch
+
+The `ship:desktop` script (in root `package.json`) chains build → mount DMG → replace `/Applications/OmniTool.app` → launch. Use this whenever you need to verify changes in the installed desktop binary.
+
+**Known HTML5 drag-and-drop trap**: Tauri v2 webview intercepts native drag/drop events by default for OS-level file-drop handling. This breaks ProseMirror / BlockNote / @dnd-kit drag (blocks highlight when grabbed but don't move). Fix is in `apps/desktop/src-tauri/src/lib.rs` via `.disable_drag_drop_handler()` on `WebviewWindowBuilder`. If you ever switch to a fresh window builder or re-init the webview, re-apply this call — without it, in-editor drag breaks silently and looks like a CSS issue.
+
+**Known CSP / Tauri IPC trap**: `apps/web/next.config.mjs` ships a `Content-Security-Policy` response header. Tauri plugin calls go through `ipc://localhost/plugin%3A...` URLs (or `http://ipc.localhost` on Windows). If `connect-src` doesn't whitelist `ipc:` + `tauri:` + `http://ipc.localhost`, every plugin invocation is silently blocked: `tauri-plugin-shell` won't open browsers (OAuth signin breaks), `tauri-plugin-notification` permission checks fail, deep-link callbacks stall, etc. Fix is in `next.config.mjs` `securityHeaders.connect-src`. When adding new plugin invocations, this whitelist is already broad enough — but if you ever tighten the CSP or fork it for a stricter route, keep these schemes.
+
+**Known stale-sidecar trap**: the desktop wrapper spawns a Node.js sidecar (`next-server`) that binds **port 19283**. Tauri does NOT kill stale sidecars on app exit. If a previous run's sidecar is still listening on 19283 when you relaunch, the new webview connects to the **OLD** sidecar — you see stale UI even after a fresh build + reinstall. Symptoms: `pnpm ship:desktop` succeeds, `/Applications/OmniTool.app` mtime is fresh, bundled CSS/JS contains your edits, but the running window shows old code.
+
+**Fix when this happens**:
+```bash
+osascript -e 'quit app "OmniTool"' 2>/dev/null
+pkill -f "next-server"            # kill stale sidecar holding port 19283
+rm -rf ~/Library/Caches/dev.omnitool.app/WebKit ~/Library/Caches/omnitool-desktop/WebKit
+open -a OmniTool
+```
+Verify with `lsof -iTCP:19283` — the listening node PID should match a child of the just-launched omnitool-desktop. Long-term fix: add a port-claim check in `apps/desktop/src-tauri/src/lib.rs` that kills any process holding 19283 before spawning its own sidecar.
+
+Other gotchas with `ship:desktop`:
+- Hardcoded `/Volumes/OmniTool` mount name. If a previous mount left a stale `/Volumes/OmniTool 1`/`2`/`3` entry, the cp step fails. The script now force-detaches `/Volumes/OmniTool*` before mounting; if you bypass the script, run `for v in /Volumes/OmniTool*; do hdiutil detach "$v" -force -quiet; done` first.
+- Turbo cache may report `FULL TURBO` and skip the build entirely. To force a real rebuild: `rm -rf apps/web/.next apps/desktop/src-tauri/resources/server .turbo node_modules/.cache/turbo && pnpm ship:desktop`.
+
 ```bash
 pnpm dev            # Start all dev servers
 pnpm dev:web        # Start web app only
@@ -119,6 +142,108 @@ Stripped-down: hamburger (mobile) + breadcrumb path bar (left, flexes) + `Runnin
 - **Nav definition**: `navSections` (top sections) + `bottomNav` (Profile, Settings) are exported. `MobileDrawer` re-imports them. **When adding a new dashboard route, add an entry to the matching section in `navSections`** (or `bottomNav` for account-y items).
 - **Auto-collapse rule**: `shouldAutoCollapse(pathname)` in `apps/web/components/layout/sidebar-context.tsx`. Currently matches `/^\/notes(\/.*)?$/` so notes get full editor width. **To add focus-mode auto-collapse for another route, extend the regex** (e.g. union with `/agents/chat`). User can override the rule per-page via the chevron toggle; the override resets on next pathname change.
 - **Width transition**: outer `<aside>` uses `transition-[width] duration-300 ease-in-out`. Inner content swaps between rail and expanded markup based on `renderRail`; the swap itself is instant (only width is animated).
+
+## Notes UX — Notion-aligned design language
+
+OmniTool's Notes surface deliberately mirrors Notion's interaction model. When extending or modifying anything under `apps/web/components/notes/**` or `apps/web/app/(dashboard)/notes/**`, preserve these patterns. Deviations from Notion should be deliberate and documented.
+
+### Layout (note detail: `/notes/[noteId]`)
+
+`apps/web/components/notes/note-block-editor.tsx` defines the canonical stack, top-down:
+
+1. **Parent chip** — `↑ {parent.title}` link, only when `note.parent` exists. Whole chip clickable, opens parent.
+2. **Title row** — emoji picker (`NoteEmojiPicker`) + 4xl/5xl bold title `<Input>` (borderless, no shadow, autosaves).
+3. **Meta strip** (one row, border-bottom): teamspace badge → `LinkedEntityPill` → `NoteTagEditor` → save status (right-aligned) → Comments trigger → History button.
+4. **Editor body** — `<BlockNoteView>` inside `min-h-[480px]` container. **Borderless**: `.bn-editor` background overridden to `transparent` in `apps/web/app/globals.css` so prose flows directly on the page surface (Notion-style). Subpages live INSIDE the editor body as inline `noteEmbed` blocks — no separate panel.
+5. **Comments panel + EmbedPicker + history sheet** — slot at the bottom; only mount points, no visual weight.
+
+**Width**: `mx-auto w-full max-w-3xl space-y-5`. Centered prose column matches Notion's default.
+
+### Inline page references — `noteEmbed` block
+
+`apps/web/components/notes/blocks/note-embed-block.tsx` renders Notion's nested-page block exactly:
+
+- **One-line row**: small icon (emoji if `note.emoji` set, else `<FileText>`) + underlined title. Whole row is the link. No "Open" button, no preview card inline.
+- **Hover preview popover**: opens after `220ms` hover, closes after `140ms` grace (so the user can move pointer onto the popover content). Popover shows large icon + bold title + first ~280 chars of `contentText`. Implemented with `Popover` controlled by `onMouseEnter`/`onMouseLeave` and matching handlers on `PopoverContent`.
+- **Fallback title prop**: when `noteEmbed` is freshly inserted by `/subpage`, the spec passes `title` from the create response so the row renders the correct label before `note.getById` resolves on the new id.
+
+### `/subpage` slash command (Notion's `/page`)
+
+`apps/web/components/notes/ai/slash-items.tsx` registers `/subpage` (aliases: `child`, `page`, `nested`) under the **Embed** group. Selection dispatches `omnitool:create-subpage`. The handler in `note-block-editor.tsx`:
+
+1. Pre-seeds `note.getById` cache for the new child via `utils.note.getById.setData({ id: row.id }, row)` — kills the second roundtrip.
+2. Inserts a `noteEmbed` block at the cursor with `{ noteId, title }` props.
+3. Captures `editor.document` + `editor.blocksToMarkdownLossy()` synchronously and fires `updateNote.mutate(...)` so the parent persists the inline reference **before** unmount (autosave's 1s debounce would otherwise lose it).
+4. `router.push(/notes/${row.id})` — Notion behavior: creating a subpage opens it so the user immediately starts writing.
+
+### Subpages — inline only (no fixed panel)
+
+Notion's nested pages live as inline blocks inside the parent's content. OmniTool follows this exactly: subpages exist as `noteEmbed` blocks within the editor body, freely repositionable like any other block.
+
+**No `NoteRelationsPanel` mounted in the layout.** The component file (`apps/web/components/notes/note-relations-panel.tsx`) is preserved as dead code with full sortable + rename logic in case we want to surface a panel view later (e.g., behind a "Pages inside" expandable). It's NOT imported by `note-block-editor.tsx`.
+
+**How users manage subpages**:
+
+- **Create new + place inline**: `/subpage` slash command at any cursor position → child is created with `parentId = current note` and a `noteEmbed` block is inserted at the cursor. The user is then navigated into the new child. Returning to the parent shows the inline reference at the position they invoked the slash.
+- **Reference an existing child or any other note**: `/embed-note` slash → embed picker (cursor-anchored) → pick a note → `noteEmbed` block inserted.
+- **Reorder/move within document**: BlockNote's built-in side menu (drag handle on block hover) — left edge of any block. Drag a `noteEmbed` to anywhere in the document, including out of/into other block groups, lists, columns. We don't override this; default BlockNote behavior is the canonical interaction.
+- **Rename**: open the child page (click the inline reference) and edit the title there. Title autosaves; the inline `noteEmbed` updates via `note.getById` cache invalidation.
+- **Delete the inline reference vs. the child note**: deleting a `noteEmbed` block (Backspace at start, or block menu → Delete) removes ONLY the inline reference. The child note still exists, accessible via the global sidebar tree (`SidebarNoteTree`) and breadcrumb chain. Deleting the child note itself (trash) requires opening it and using the trash action. This mirrors Notion exactly.
+
+**Orphan children** (DB rows where `parentId = current note` but no inline `noteEmbed` references them in the parent's blocks):
+
+- **Auto-migrated on first open**: `note-block-editor.tsx` runs a one-shot effect (guarded by `migratedNoteIdRef` per note id) that detects orphans via `collectNoteEmbedIds(editor.document)` and appends a `noteEmbed` block for each at the end of the document, then triggers autosave. Subsequent opens see the embeds in `note.blocks` so the migration is a no-op.
+- The migration is one-shot per session: if the user deletes a migrated embed block, it does NOT re-insert until the user navigates to a different note and back. Predictable, no infinite loops with realtime invalidation.
+- Found via global sidebar tree which always shows the full parent→child hierarchy regardless of inline references.
+- Can be re-inserted into the document with `/embed-note` → pick the orphan.
+
+### Embed picker — cursor-anchored dropdown
+
+`apps/web/components/notes/blocks/embed-picker.tsx` renders as a non-modal floating panel anchored to the **caret position** (matches the slash menu's anchor exactly), not a Dialog modal:
+
+- `captureCursorPoint()` reads `window.getSelection().getRangeAt(0).getBoundingClientRect()` synchronously inside the `omnitool:open-embed-picker` handler — before React re-renders and focus drifts.
+- Position resolution order: cursor rect → block element rect (`[data-id="${blockId}"]`) → viewport-centered.
+- Auto-flips above the block if it would clip below the viewport. Right-edge clamps to viewport.
+- No backdrop/overlay — the page stays fully visible behind the picker. Click-outside the panel + Escape close it.
+
+### Breadcrumb — always real titles
+
+`apps/web/components/layout/breadcrumbs.tsx` resolves note titles from two sources, in order:
+
+1. `trpc.note.getAncestorChain` (canonical, includes parent chain).
+2. `trpc.note.list` cache (already populated for the sidebar tree) — fallback for instant rendering while ancestor query loads.
+3. `prettify(seg)` last-resort `#abc123` placeholder.
+
+Never let a raw cuid flash in the breadcrumb — that's the symptom that the cache fallback isn't reading.
+
+### Optimistic UI / cache pre-seed conventions
+
+When a mutation creates a note we'll immediately render or navigate to, **pre-seed the `note.getById` cache** with the response row:
+
+```ts
+utils.note.getById.setData({ id: row.id }, row as any)
+```
+
+This eliminates the first-paint loading flicker on the new note's detail page and on any inline `noteEmbed` referencing it. Pattern used in:
+- `note-block-editor.tsx` `createSubpageMutation.onSuccess`
+- `note-relations-panel.tsx` `createNote.onSuccess`
+
+### Drag UX rules
+
+- **Click-vs-drag boundary**: 4px (`PointerSensor.activationConstraint.distance`). Don't lower this — accidental drags ruin click affordances.
+- **Optimistic always**: never wait for the server before showing the new ordering. Local mirror state + cache `setData` upfront; server's `onSettled` invalidate reconciles.
+- **Server is authoritative for position**: `reindexSiblings` rewrites all sibling positions to a clean 0..n. Don't try to predict the exact final positions client-side; let the refetch fix any drift.
+- **Cycle prevention is server-only**: `isAncestorOf` in the `note.move` handler. UI doesn't replicate this check — surfaces an error toast instead and rolls back via invalidate.
+
+### What we've intentionally NOT borrowed from Notion (yet)
+
+- Drag from Subpages panel into editor body (would inline-embed). Out of scope; users use `/subpage` for that.
+- Drag in the global sidebar tree or `/notes` page tree.
+- Cover images / page banners.
+- Toggle (collapsible) blocks at arbitrary depth in editor.
+- Database views (table/board/gallery/timeline/calendar) — Notes are documents, not collections in this system.
+
+When extending Notes UX, prefer porting another Notion pattern over inventing a new one. If a Notion behavior conflicts with our domain (teamspaces, integrations, AI), document the deviation in this section.
 
 ## Database
 

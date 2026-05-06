@@ -66,3 +66,14 @@
     --safe-area-inset-right: env(safe-area-inset-right);
   }
 }
+
+/* ─── BlockNote editor surface ──────────────────────────────────────────
+ * The shadcn variant ships a card-like background on `.bn-editor` via
+ * `--bn-colors-editor-background`. In our Notion-style layout the editor
+ * is meant to flow as plain prose under the title — strip the bg/border
+ * so it inherits the page surface. Padding stays from the package CSS.
+ */
+.bn-editor {
+  background-color: transparent !important;
+  border-radius: 0 !important;
+}

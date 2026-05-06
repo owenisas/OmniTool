@@ -13,7 +13,10 @@ import { Loader2 } from "lucide-react";
 export function NoteDetailClient({ noteId }: { noteId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data, isLoading, error } = trpc.note.getById.useQuery({ id: noteId });
+  const { data, isLoading, error } = trpc.note.getById.useQuery(
+    { id: noteId },
+    { staleTime: 30_000 },
+  );
 
   // Resolve the mention id (if any) to its blockId so we can scroll the
   // editor to the right anchor. Skipped when no mention param is present.

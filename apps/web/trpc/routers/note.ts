@@ -5,7 +5,7 @@ import {
   transferNoteToTeamspaceSchema,
   updateNoteSchema,
 } from "@omnitool/shared/validators";
-import type { Prisma } from "@omnitool/database";
+import { Prisma } from "@omnitool/database";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -252,6 +252,7 @@ export const noteRouter = createTRPCRouter({
             select: {
               id: true,
               title: true,
+              emoji: true,
               position: true,
               isPinned: true,
               updatedAt: true,
@@ -269,7 +270,8 @@ export const noteRouter = createTRPCRouter({
   /**
    * Walk parentId chain from the given note up to the root.
    * Returns the chain in order [root, ..., self] where each entry is
-   * `{ id, title }`. Limited to MAX_DEPTH+1 hops as a safety cap.
+   * `{ id, title }`. Uses a recursive CTE for a single DB roundtrip
+   * instead of N sequential queries.
    *
    * The return type stays a plain array to keep existing callers (breadcrumbs)
    * working; teamspace context is fetched separately via `getTeamspaceForNote`.
@@ -277,23 +279,31 @@ export const noteRouter = createTRPCRouter({
   getAncestorChain: noteProcedure
     .input(z.object({ noteId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const chain: { id: string; title: string }[] = [];
-      let cur: string | null = input.noteId;
-      const seen = new Set<string>();
-      // Cap loop iterations to avoid pathological cycles (defense-in-depth)
-      for (let i = 0; i < 64 && cur; i += 1) {
-        if (seen.has(cur)) break;
-        seen.add(cur);
-        const row: { id: string; title: string; parentId: string | null } | null =
-          await ctx.prisma.note.findFirst({
-            where: { id: cur, teamId: { in: ctx.teamspaceIds } },
-            select: { id: true, title: true, parentId: true },
-          });
-        if (!row) break;
-        chain.unshift({ id: row.id, title: row.title });
-        cur = row.parentId;
-      }
-      return chain;
+      // Guard: if user has no teamspaces, return empty chain
+      if (ctx.teamspaceIds.length === 0) return [];
+
+      // Single recursive CTE query — walks the parent chain in one DB roundtrip
+      const chain = await ctx.prisma.$queryRaw<
+        { id: string; title: string; depth: number }[]
+      >`
+        WITH RECURSIVE ancestors AS (
+          SELECT id, title, "parentId", 0 AS depth
+          FROM notes
+          WHERE id = ${input.noteId}
+            AND "teamId" IN (${Prisma.join(ctx.teamspaceIds)})
+            AND "deletedAt" IS NULL
+          UNION ALL
+          SELECT n.id, n.title, n."parentId", a.depth + 1
+          FROM notes n
+          INNER JOIN ancestors a ON n.id = a."parentId"
+          WHERE a.depth < 64
+            AND n."teamId" IN (${Prisma.join(ctx.teamspaceIds)})
+            AND n."deletedAt" IS NULL
+        )
+        SELECT id, title, depth FROM ancestors
+        ORDER BY depth DESC
+      `;
+      return chain.map(({ id, title }) => ({ id, title }));
     }),
 
   /**

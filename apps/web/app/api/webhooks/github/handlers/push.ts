@@ -1,7 +1,7 @@
 import { prisma } from "@omnitool/database";
 import { emitActivityEvent } from "@/lib/activity/emit";
 import type { WebhookHandler } from "./types";
-import { resolveProjectByRepo, resolveUserByGithubLogin, parseTaskReferences } from "./utils";
+import { resolveProjectByRepo, parseTaskReferences } from "./utils";
 
 interface CommitPayload {
   id: string;
@@ -15,6 +15,9 @@ interface CommitPayload {
 
 /**
  * Handle push events — record commits and link to tasks via commit messages.
+ *
+ * Performance: batch-resolves all author logins in a single query instead of
+ * one query per commit. Entity link upserts are parallelized per commit.
  */
 export const handlePush: WebhookHandler = async (payload) => {
   const repo = payload.repository as Record<string, unknown>;
@@ -30,10 +33,33 @@ export const handlePush: WebhookHandler = async (payload) => {
   const project = await resolveProjectByRepo(repoFullName);
   if (!project) return;
 
+  // Batch-resolve all unique author logins in one query
+  const allLogins = new Set<string>();
+  for (const commit of commits) {
+    if (commit.author?.username) allLogins.add(commit.author.username);
+  }
+  const pusher = payload.pusher as Record<string, unknown> | undefined;
+  const pusherLogin = (pusher?.name as string) ?? null;
+  if (pusherLogin) allLogins.add(pusherLogin);
+
+  const loginToUserId = new Map<string, string>();
+  if (allLogins.size > 0) {
+    const users = await prisma.user.findMany({
+      where: { githubLogin: { in: Array.from(allLogins) } },
+      select: { id: true, githubLogin: true },
+    });
+    for (const u of users) {
+      if (u.githubLogin) loginToUserId.set(u.githubLogin, u.id);
+    }
+  }
+
+  // Process commits — upsert each, then batch entity link upserts
+  const entityLinkPromises: Promise<unknown>[] = [];
+
   for (const commit of commits) {
     const authorLogin = commit.author?.username ?? null;
     const authorUserId = authorLogin
-      ? await resolveUserByGithubLogin(authorLogin)
+      ? (loginToUserId.get(authorLogin) ?? null)
       : null;
 
     // Calculate rough additions/deletions from file lists
@@ -61,37 +87,40 @@ export const handlePush: WebhookHandler = async (payload) => {
       },
     });
 
-    // Link to referenced tasks
+    // Link to referenced tasks — parallelize upserts
     const refs = await parseTaskReferences(commit.message);
     for (const taskId of refs) {
-      await prisma.entityLink.upsert({
-        where: {
-          sourceType_sourceId_targetType_targetId_linkType: {
+      entityLinkPromises.push(
+        prisma.entityLink.upsert({
+          where: {
+            sourceType_sourceId_targetType_targetId_linkType: {
+              sourceType: "commit",
+              sourceId: record.id,
+              targetType: "task",
+              targetId: taskId,
+              linkType: "references",
+            },
+          },
+          create: {
             sourceType: "commit",
             sourceId: record.id,
             targetType: "task",
             targetId: taskId,
             linkType: "references",
+            metadata: { sha: commit.id, repoFullName },
           },
-        },
-        create: {
-          sourceType: "commit",
-          sourceId: record.id,
-          targetType: "task",
-          targetId: taskId,
-          linkType: "references",
-          metadata: { sha: commit.id, repoFullName },
-        },
-        update: {},
-      });
+          update: {},
+        }),
+      );
     }
   }
 
+  // Flush all entity link upserts in parallel
+  await Promise.all(entityLinkPromises);
+
   // Emit a single push event (batch of commits)
-  const pusher = payload.pusher as Record<string, unknown> | undefined;
-  const pusherLogin = (pusher?.name as string) ?? null;
   const pusherUserId = pusherLogin
-    ? await resolveUserByGithubLogin(pusherLogin)
+    ? (loginToUserId.get(pusherLogin) ?? null)
     : null;
 
   emitActivityEvent({

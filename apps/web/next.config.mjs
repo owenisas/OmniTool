@@ -35,7 +35,12 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: https:",
       "font-src 'self' https://fonts.gstatic.com",
-      "connect-src 'self' https://*.supabase.co https://api.notion.com https://api.github.com https://api.linear.app https://slack.com https://integrate.api.nvidia.com https://api.anthropic.com wss:",
+      // `ipc:` + `http://ipc.localhost` + `tauri:` are needed so Tauri's
+      // webview can invoke Rust plugin commands (shell.open, deep-link,
+      // notification, etc.). Without these the desktop app silently fails
+      // OAuth redirects, native notifications, and any plugin call that
+      // routes through `window.__TAURI_INTERNALS__.invoke`.
+      "connect-src 'self' ipc: tauri: http://ipc.localhost https://*.supabase.co https://api.notion.com https://api.github.com https://api.linear.app https://slack.com https://integrate.api.nvidia.com https://api.anthropic.com wss:",
       "frame-ancestors 'self'",
       "base-uri 'self'",
       "form-action 'self' https://*.supabase.co https://github.com https://accounts.google.com https://api.notion.com",
@@ -56,7 +61,14 @@ const nextConfig = {
       assetPrefix: `http://${internalHost}:3000`,
     }),
   images: {
-    unoptimized: true,
+    remotePatterns: [
+      { protocol: "https", hostname: "avatars.githubusercontent.com" },
+      { protocol: "https", hostname: "*.supabase.co" },
+      { protocol: "https", hostname: "*.supabase.in" },
+      { protocol: "https", hostname: "*.notion.so" },
+      { protocol: "https", hostname: "secure.notion-static.com" },
+      { protocol: "https", hostname: "lh3.googleusercontent.com" },
+    ],
   },
   transpilePackages: [
     "@omnitool/ui",

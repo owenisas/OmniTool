@@ -56,16 +56,18 @@ export function SocialAuthButtons({
   callbackUrl = "/",
 }: SocialAuthButtonsProps) {
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   async function handleOAuthLogin(provider: Provider) {
     setLoadingProvider(provider);
+    setErrorMsg(null);
     try {
+      const isDesktop = isTauri();
       const supabase = createSupabaseBrowserClient();
       const nextUrl =
         provider === "github"
           ? `/settings/integrations?connect=${provider}`
           : callbackUrl;
-      const isDesktop = isTauri();
       const redirectTo = isDesktop
         ? `omnitool://auth/callback?next=${encodeURIComponent(nextUrl)}`
         : `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(nextUrl)}`;
@@ -77,27 +79,41 @@ export function SocialAuthButtons({
         },
       });
       if (error) {
-        console.error(`OAuth ${provider} error:`, error.message);
+        setErrorMsg(error.message);
         setLoadingProvider(null);
         return;
       }
-
       if (isDesktop) {
-        if (data.url) {
-          await openInBrowser(data.url);
+        if (!data?.url) {
+          setErrorMsg("No OAuth URL from Supabase. Check provider config.");
+          setLoadingProvider(null);
           return;
         }
+        try {
+          await openInBrowser(data.url);
+        } catch (openErr) {
+          setErrorMsg(
+            `Couldn't open browser. Copy this URL manually:\n${data.url}`,
+          );
+          console.error("[oauth] openInBrowser failed:", openErr);
+        }
         setLoadingProvider(null);
+        return;
       }
-      // On success, browser redirects — no need to clear loading state
+      // Web: Supabase auto-navigates. No need to clear loading.
     } catch (err) {
-      console.error(`OAuth ${provider} error:`, err);
+      setErrorMsg(err instanceof Error ? err.message : String(err));
       setLoadingProvider(null);
     }
   }
 
   return (
     <div className="space-y-3">
+      {errorMsg && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive whitespace-pre-wrap">
+          {errorMsg}
+        </div>
+      )}
       {providers.map((provider) => (
         <Button
           key={provider.id}

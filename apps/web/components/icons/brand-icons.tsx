@@ -88,8 +88,9 @@ export function LinearIcon({ className }: IconProps) {
 }
 
 /**
- * OmniTool app logo — derived from the app's icon.svg.
- * Shows the notepad with cyan plus mark.
+ * OmniTool app logo — orbital hub mark.
+ * Four satellite nodes on a subtle ring orbit a cyan center hub,
+ * representing multiple tools converging into one platform.
  */
 export function OmniToolLogo({ className }: IconProps) {
   return (
@@ -100,23 +101,12 @@ export function OmniToolLogo({ className }: IconProps) {
       aria-label="OmniTool"
     >
       <rect width="512" height="512" rx="112" fill="#0f172a" />
-      <path
-        d="M148 167c0-18.8 15.2-34 34-34h148c18.8 0 34 15.2 34 34v178c0 18.8-15.2 34-34 34H182c-18.8 0-34-15.2-34-34V167Z"
-        fill="#f8fafc"
-      />
-      <path
-        d="M196 204h120M196 256h120M196 308h78"
-        stroke="#0f172a"
-        strokeWidth="28"
-        strokeLinecap="round"
-      />
-      <circle cx="360" cy="352" r="58" fill="#38bdf8" />
-      <path
-        d="M333 352h54M360 325v54"
-        stroke="#0f172a"
-        strokeWidth="20"
-        strokeLinecap="round"
-      />
+      <circle cx="256" cy="256" r="140" fill="none" stroke="#f8fafc" strokeWidth="28" strokeOpacity="0.5" />
+      <circle cx="157" cy="157" r="32" fill="#f8fafc" />
+      <circle cx="355" cy="157" r="32" fill="#f8fafc" />
+      <circle cx="355" cy="355" r="32" fill="#f8fafc" />
+      <circle cx="157" cy="355" r="32" fill="#f8fafc" />
+      <circle cx="256" cy="256" r="52" fill="#38bdf8" />
     </svg>
   );
 }
@@ -133,23 +123,12 @@ export function OmniToolMark({ className }: IconProps) {
       aria-label="OmniTool"
     >
       <rect width="512" height="512" rx="112" fill="#0f172a" />
-      <path
-        d="M148 167c0-18.8 15.2-34 34-34h148c18.8 0 34 15.2 34 34v178c0 18.8-15.2 34-34 34H182c-18.8 0-34-15.2-34-34V167Z"
-        fill="#f8fafc"
-      />
-      <path
-        d="M196 204h120M196 256h120M196 308h78"
-        stroke="#0f172a"
-        strokeWidth="28"
-        strokeLinecap="round"
-      />
-      <circle cx="360" cy="352" r="58" fill="#38bdf8" />
-      <path
-        d="M333 352h54M360 325v54"
-        stroke="#0f172a"
-        strokeWidth="20"
-        strokeLinecap="round"
-      />
+      <circle cx="256" cy="256" r="140" fill="none" stroke="#f8fafc" strokeWidth="28" strokeOpacity="0.5" />
+      <circle cx="157" cy="157" r="32" fill="#f8fafc" />
+      <circle cx="355" cy="157" r="32" fill="#f8fafc" />
+      <circle cx="355" cy="355" r="32" fill="#f8fafc" />
+      <circle cx="157" cy="355" r="32" fill="#f8fafc" />
+      <circle cx="256" cy="256" r="52" fill="#38bdf8" />
     </svg>
   );
 }

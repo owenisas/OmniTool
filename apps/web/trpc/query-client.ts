@@ -15,12 +15,12 @@ export function makeQueryClient() {
         gcTime: 24 * 60 * 60 * 1000,
         // Use cache when offline, fetch when online
         networkMode: "offlineFirst",
-        // Don't refetch on every window focus — only when data is stale
-        refetchOnWindowFocus: "always",
-        // Don't refetch on mount if cache is fresh (prevents re-fetches on tab switch)
+        // Only refetch on focus when data is stale (respects staleTime)
+        refetchOnWindowFocus: true,
+        // Don't refetch on mount if cache is still fresh
         refetchOnMount: true,
-        // Don't refetch on reconnect unless stale
-        refetchOnReconnect: "always",
+        // Only refetch on reconnect when stale
+        refetchOnReconnect: true,
         retry(failureCount, error) {
           // Don't retry when explicitly offline
           if (error instanceof Error && error.message === "OFFLINE") return false;

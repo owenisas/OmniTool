@@ -66,19 +66,19 @@ export async function setClipboard(text: string): Promise<void> {
 
 /**
  * Open a URL in the system browser.
- * In Tauri, uses the shell plugin; on web, falls back to window.open.
+ *
+ * Desktop (Tauri): invokes the shell plugin (`plugin:shell|open`).
+ * Web: falls back to `window.open`.
+ *
  * Used for OAuth flows where the user needs their browser session
  * (e.g. GitHub, Notion — they won't be logged in inside the webview).
+ * Errors propagate so callers can surface them in the UI.
  */
 export async function openInBrowser(url: string): Promise<void> {
   if (isTauri()) {
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open(url);
-      return;
-    } catch {
-      // fall through to window.open
-    }
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+    return;
   }
   window.open(url, "_blank");
 }

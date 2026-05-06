@@ -307,6 +307,12 @@ pub fn run() {
                 .min_inner_size(860.0, 600.0)
                 .center()
                 .resizable(true)
+                // Disable Tauri's native file-drop handler so HTML5
+                // drag-and-drop events (dragstart/dragover/drop) reach the
+                // webview. Without this, ProseMirror / BlockNote drag is
+                // intercepted at the OS level — blocks highlight when
+                // grabbed but never move.
+                .disable_drag_drop_handler()
                 .on_navigation(move |url| {
                     let host = url.host_str().unwrap_or("");
                     let scheme = url.scheme();

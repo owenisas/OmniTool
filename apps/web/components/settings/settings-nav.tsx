@@ -31,36 +31,25 @@ const GROUPS = [
     ],
   },
   {
-    label: "Workspace",
-    links: [{ href: "/settings/team", label: "Team", icon: Users }],
-  },
-  {
     label: "Preferences",
     links: [
+      { href: "/settings/team", label: "Team", icon: Users },
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/settings/appearance", label: "Appearance", icon: Palette },
       { href: "/settings/notes", label: "Notes", icon: StickyNote },
-    ],
-  },
-  {
-    label: "Connections",
-    links: [
       { href: "/settings/integrations", label: "Integrations", icon: Plug },
     ],
   },
   {
-    label: "Developer",
+    label: "About",
     links: [
       {
         href: "/settings/coding-sessions",
         label: "Coding Sessions",
         icon: Terminal,
       },
+      { href: "/settings/about", label: "About OmniTool", icon: Info },
     ],
-  },
-  {
-    label: "About",
-    links: [{ href: "/settings/about", label: "About OmniTool", icon: Info }],
   },
 ];
 

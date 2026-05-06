@@ -12,7 +12,6 @@ import {
   BarChart3,
   Bot,
   Settings,
-  UserCircle,
   ClipboardList,
   CheckSquare,
   ChevronLeft,
@@ -29,7 +28,6 @@ import {
 } from "@omnitool/ui/components/tooltip";
 import { TeamSwitcher } from "./team-switcher";
 import { useSidebar } from "./sidebar-context";
-import { SignOutButton } from "./sign-out-button";
 import { SidebarNoteTree } from "./sidebar-note-tree";
 import { OmniToolLogo, OmniToolMark } from "@/components/icons/brand-icons";
 
@@ -60,19 +58,9 @@ const navSections: NavSection[] = [
       { name: "Projects", href: "/projects", icon: FolderKanban },
       { name: "Issues", href: "/issues", icon: Bug },
       { name: "Notes", href: "/notes", icon: StickyNote },
-    ],
-  },
-  {
-    label: "Insights",
-    items: [
+      { name: "AI Agents", href: "/agents", icon: Bot },
       { name: "Performance", href: "/performance", icon: BarChart3 },
       { name: "Team Activity", href: "/team-activity", icon: Users },
-    ],
-  },
-  {
-    label: "AI",
-    items: [
-      { name: "AI Agents", href: "/agents", icon: Bot },
     ],
   },
 ];
@@ -81,7 +69,6 @@ const navSections: NavSection[] = [
 export const navigation: NavItem[] = navSections.flatMap((s) => s.items);
 
 export const bottomNav: NavItem[] = [
-  { name: "Profile", href: "/profile", icon: UserCircle },
   { name: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -393,7 +380,6 @@ export function Sidebar() {
                 onNavigate={navigate}
               />
             ))}
-            <SignOutButton variant={collapsed ? "rail" : "expanded"} />
           </div>
         </TooltipProvider>
       </div>

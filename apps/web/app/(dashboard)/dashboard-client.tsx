@@ -4,6 +4,59 @@ import Link from "next/link";
 import { trpc } from "@/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@omnitool/ui/components/card";
 import { formatDistanceToNow } from "date-fns";
+import {
+  StickyNote,
+  CheckSquare,
+  Bug,
+  GitPullRequest,
+  GitCommit,
+  ArrowRightLeft,
+  Activity,
+} from "lucide-react";
+
+/* ─── Helpers ─────────────────────────────────────────────── */
+
+function activityLabel(type: string): string {
+  const labels: Record<string, string> = {
+    "task.created": "Created task",
+    "task.completed": "Completed task",
+    "task.updated": "Updated task",
+    "issue.created": "Opened issue",
+    "issue.closed": "Closed issue",
+    "issue.updated": "Updated issue",
+    "note.created": "Created note",
+    "note.updated": "Edited note",
+    "github.pr.merged": "Merged PR",
+    "github.pr.opened": "Opened PR",
+    "github.push": "Pushed code",
+    "handoff.completed": "Completed handoff",
+  };
+  return labels[type] ?? type.replace(/\./g, " ");
+}
+
+function ActivityIcon({
+  subjectType,
+  className,
+}: {
+  subjectType: string;
+  className?: string;
+}) {
+  const icons: Record<
+    string,
+    React.ComponentType<{ className?: string }>
+  > = {
+    task: CheckSquare,
+    issue: Bug,
+    note: StickyNote,
+    pr: GitPullRequest,
+    commit: GitCommit,
+    handoff: ArrowRightLeft,
+  };
+  const Icon = icons[subjectType] ?? Activity;
+  return <Icon className={className} />;
+}
+
+/* ─── Stat cards ──────────────────────────────────────────── */
 
 function StatCard({
   title,
@@ -43,6 +96,174 @@ function StatSkeleton() {
   );
 }
 
+/* ─── Continue card ───────────────────────────────────────── */
+
+function ContinueCard({
+  lastNote,
+  nextTask,
+}: {
+  lastNote: { id: string; title: string; updatedAt: Date | string } | null | undefined;
+  nextTask:
+    | {
+        id: string;
+        title: string;
+        dueDate: Date | string | null;
+        project: { name: string; slug: string };
+      }
+    | undefined;
+}) {
+  const hasContent = lastNote || nextTask;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Pick up where you left off</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {!hasContent ? (
+          <p className="text-sm text-muted-foreground">
+            All clear — no recent edits or upcoming deadlines.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {lastNote && (
+              <li>
+                <Link
+                  href={`/notes/${lastNote.id}`}
+                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2 transition-colors hover:bg-accent/40"
+                >
+                  <StickyNote className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {lastNote.title || "Untitled"}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {formatDistanceToNow(new Date(lastNote.updatedAt), {
+                      addSuffix: true,
+                    })}
+                  </span>
+                </Link>
+              </li>
+            )}
+            {nextTask && (
+              <li>
+                <Link
+                  href={`/projects/${nextTask.project.slug}`}
+                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2 transition-colors hover:bg-accent/40"
+                >
+                  <CheckSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {nextTask.title}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {nextTask.dueDate
+                      ? `Due ${formatDistanceToNow(new Date(nextTask.dueDate), { addSuffix: true })}`
+                      : nextTask.project.name}
+                  </span>
+                </Link>
+              </li>
+            )}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── Recent activity card ────────────────────────────────── */
+
+function RecentActivityCard() {
+  const { data: events, isLoading } = trpc.activity.myRecent.useQuery(
+    { limit: 5 },
+    { staleTime: 5 * 60 * 1000 },
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Your recent activity</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {isLoading ? (
+          <div className="space-y-2">
+            <div className="h-10 animate-pulse rounded bg-muted" />
+            <div className="h-10 animate-pulse rounded bg-muted" />
+            <div className="h-10 animate-pulse rounded bg-muted" />
+          </div>
+        ) : !events || events.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No activity yet — start by creating a task or note.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {events.map((event) => {
+              const payload = (event.payload ?? {}) as Record<string, unknown>;
+              const title = (payload.title as string) ?? event.subjectType;
+              return (
+                <li
+                  key={event.id}
+                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2"
+                >
+                  <ActivityIcon
+                    subjectType={event.subjectType}
+                    className="h-4 w-4 shrink-0 text-muted-foreground"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-medium">
+                      {activityLabel(event.type)}
+                    </span>
+                    <span className="ml-1 text-sm text-muted-foreground">
+                      {title}
+                    </span>
+                  </div>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {formatDistanceToNow(new Date(event.createdAt), {
+                      addSuffix: true,
+                    })}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─── Skeleton for bottom cards ───────────────────────────── */
+
+function BottomCardsSkeleton() {
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Pick up where you left off</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            <div className="h-10 animate-pulse rounded bg-muted" />
+            <div className="h-10 animate-pulse rounded bg-muted" />
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Your recent activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            <div className="h-10 animate-pulse rounded bg-muted" />
+            <div className="h-10 animate-pulse rounded bg-muted" />
+            <div className="h-10 animate-pulse rounded bg-muted" />
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ─── Main overview ───────────────────────────────────────── */
+
 export function DashboardOverview() {
   const { data: overview, isLoading } = trpc.dashboard.overview.useQuery(
     undefined,
@@ -51,6 +272,10 @@ export function DashboardOverview() {
       staleTime: 5 * 60 * 1000,
     }
   );
+
+  const { data: lastNote } = trpc.note.lastEditedToday.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
 
   if (isLoading && !overview) {
     return (
@@ -85,6 +310,7 @@ export function DashboardOverview() {
             </CardContent>
           </Card>
         </div>
+        <BottomCardsSkeleton />
       </>
     );
   }
@@ -221,6 +447,15 @@ export function DashboardOverview() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Actionable bottom row — replaces the old redundant shortcuts section */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <ContinueCard
+          lastNote={lastNote}
+          nextTask={overview.upcomingDue[0]}
+        />
+        <RecentActivityCard />
       </div>
     </>
   );

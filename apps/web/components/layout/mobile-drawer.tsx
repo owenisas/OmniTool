@@ -13,7 +13,6 @@ import {
 import { navigation, bottomNav, navigationActive } from "./sidebar";
 import { TeamSwitcher } from "./team-switcher";
 import { useSidebar } from "./sidebar-context";
-import { SignOutButton } from "./sign-out-button";
 import { SidebarNoteTree } from "./sidebar-note-tree";
 import { OmniToolLogo } from "@/components/icons/brand-icons";
 
@@ -92,7 +91,6 @@ export function MobileDrawer() {
               </Link>
             );
           })}
-          <SignOutButton variant="drawer" />
         </div>
       </SheetContent>
     </Sheet>

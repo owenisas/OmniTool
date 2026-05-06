@@ -36,60 +36,76 @@ export async function GET(req: Request) {
   let generated = 0;
   let skipped = 0;
 
-  for (const user of users) {
-    // Skip if digest already exists for today
-    const existing = await prisma.newsDigest.findUnique({
-      where: { userId_date: { userId: user.id, date: today } },
-    });
-    if (existing) {
-      skipped++;
-      continue;
-    }
+  // Pre-filter users who already have today's digest in a single query
+  const existingDigests = await prisma.newsDigest.findMany({
+    where: {
+      userId: { in: users.map((u) => u.id) },
+      date: today,
+    },
+    select: { userId: true },
+  });
+  const alreadyProcessed = new Set(existingDigests.map((d) => d.userId));
 
-    try {
-      const teamId = user.teamMembers[0]?.teamId;
+  const usersToProcess = users.filter((u) => !alreadyProcessed.has(u.id));
+  skipped = users.length - usersToProcess.length;
 
-      // 1. Extract topics from notes
-      const topics = await extractTopicsFromNotes(user.id, teamId);
-      if (topics.length === 0) continue;
+  // Process users with concurrency limit (5 at a time) to avoid
+  // overwhelming AI providers and DB connections.
+  const CONCURRENCY = 5;
+  for (let i = 0; i < usersToProcess.length; i += CONCURRENCY) {
+    const batch = usersToProcess.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (user) => {
+        const teamId = user.teamMembers[0]?.teamId;
 
-      // 2. Search for relevant news
-      const articles = await searchNewsForTopics(topics);
-      if (articles.length === 0) continue;
+        // 1. Extract topics from notes
+        const topics = await extractTopicsFromNotes(user.id, teamId);
+        if (topics.length === 0) return "no_topics";
 
-      // 3. Synthesize digest
-      const { synthesis, summarizedArticles } = await synthesizeDigest(
-        articles,
-        topics
-      );
+        // 2. Search for relevant news
+        const articles = await searchNewsForTopics(topics);
+        if (articles.length === 0) return "no_articles";
 
-      // 4. Store digest
-      await prisma.newsDigest.create({
-        data: {
-          userId: user.id,
-          date: today,
-          topics: topics as Prisma.InputJsonValue,
-          articles: summarizedArticles as unknown as Prisma.InputJsonValue,
-          synthesis,
-        },
-      });
+        // 3. Synthesize digest
+        const { synthesis, summarizedArticles } = await synthesizeDigest(
+          articles,
+          topics,
+        );
 
-      // 5. Create a note with the digest content
-      const digestParent = await getOrCreateDigestParent(user.id);
-      await prisma.note.create({
-        data: {
-          title: `News Digest — ${today}`,
-          contentText: synthesis,
-          blocks: digestToBlocks(synthesis, summarizedArticles) as Prisma.InputJsonValue,
-          authorId: user.id,
-          parentId: digestParent.id,
-          position: 0,
-        },
-      });
+        // 4. Store digest
+        await prisma.newsDigest.create({
+          data: {
+            userId: user.id,
+            date: today,
+            topics: topics as Prisma.InputJsonValue,
+            articles: summarizedArticles as unknown as Prisma.InputJsonValue,
+            synthesis,
+          },
+        });
 
-      generated++;
-    } catch (err) {
-      console.error(`[NewsDigest] Failed for user ${user.id}:`, err);
+        // 5. Create a note with the digest content
+        const digestParent = await getOrCreateDigestParent(user.id);
+        await prisma.note.create({
+          data: {
+            title: `News Digest — ${today}`,
+            contentText: synthesis,
+            blocks: digestToBlocks(synthesis, summarizedArticles) as Prisma.InputJsonValue,
+            authorId: user.id,
+            parentId: digestParent.id,
+            position: 0,
+          },
+        });
+
+        return "generated";
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value === "generated") {
+        generated++;
+      } else if (result.status === "rejected") {
+        console.error("[NewsDigest] Failed for user:", result.reason);
+      }
     }
   }
 
