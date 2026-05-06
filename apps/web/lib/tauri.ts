@@ -5,7 +5,11 @@
  */
 export function isTauri(): boolean {
   if (typeof window === "undefined") return false;
-  return !!(window as any).__TAURI_INTERNALS__;
+  const global = globalThis as typeof globalThis & {
+    isTauri?: boolean;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return global.isTauri === true || !!global.__TAURI_INTERNALS__;
 }
 
 /**

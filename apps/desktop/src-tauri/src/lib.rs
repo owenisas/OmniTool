@@ -250,6 +250,37 @@ fn wait_for_server_ready() -> bool {
     false
 }
 
+// ─── Tests ──────────────────────────────────────────────────────────────
+//
+// Lightweight Rust-side unit tests. We don't spin up a real Tauri runtime
+// here — that requires a windowing display and is reserved for full E2E.
+// These tests cover pure helper logic and string contracts that don't
+// depend on the runtime.
+#[cfg(test)]
+mod tests {
+    use super::SERVER_PORT;
+
+    /// The sidecar port is hard-coded throughout the codebase (CSP allowlist,
+    /// app-shell splash JS, ship:desktop script, capabilities/default.json
+    /// remote-urls). Bump this constant only when you also update those.
+    #[test]
+    fn server_port_is_19283() {
+        assert_eq!(SERVER_PORT, 19283);
+    }
+
+    /// `omnitool://` must be in CFBundleURLSchemes (Info.plist) for deep
+    /// links to land on the app. The deep-link plugin config in
+    /// tauri.conf.json drives this — guard against accidental rename.
+    #[test]
+    fn deep_link_scheme_exists_in_config() {
+        let config = include_str!("../tauri.conf.json");
+        assert!(
+            config.contains("\"omnitool\""),
+            "tauri.conf.json must register the `omnitool` deep-link scheme"
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

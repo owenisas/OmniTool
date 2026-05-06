@@ -245,6 +245,23 @@ This eliminates the first-paint loading flicker on the new note's detail page an
 
 When extending Notes UX, prefer porting another Notion pattern over inventing a new one. If a Notion behavior conflicts with our domain (teamspaces, integrations, AI), document the deviation in this section.
 
+## Testing pipeline
+
+Five-layer pipeline scoped to what's actually feasible on Apple-Silicon-only macOS (where `tauri-driver` doesn't work). Full doc + commands: **`apps/web/e2e/README.md`**.
+
+- **Layer 1 (unit)** — `pnpm --filter @omnitool/web test`. Vitest. Includes:
+  - `lib/**/*.test.ts` — pure helpers (notes parsers, validators).
+  - `lib/tauri.test.ts` — Tauri IPC shim against `@tauri-apps/api/mocks`. Catches `openInBrowser` falling back to `window.open`, plugin name typos, etc.
+  - `e2e/tests/oauth-mock.test.ts` — verifies the OAuth provider mock harness behaves like GitHub.
+- **Layer 2 (OAuth mock harness)** — `apps/web/e2e/harness/oauth-mock.ts`. Local HTTP server impersonating GitHub OAuth endpoints. Used by Playwright integration tests so PR runs are deterministic and don't touch real github.com.
+- **Layer 3 (Playwright route smoke)** — `pnpm --filter @omnitool/web test:e2e`. Walks every dashboard route after login. Catches React #418 hydration mismatches, 5xx tRPC responses, broken layout imports.
+- **Layer 4 (Playwright integration OAuth)** — same Playwright runner. Drives Connect-GitHub end-to-end against the mock server.
+- **Layer 5 (macOS deep-link smoke)** — `pnpm --filter @omnitool/web test:smoke:deeplinks`. AppleScript reads the running Tauri app's webview URL via accessibility tree after `open omnitool://...`. Run pre-release while OmniTool is open. Manual; not in CI.
+
+CI: `.github/workflows/ci.yml`. Two jobs always run (`ci` Vitest + `rust-tests` `cargo test`); `e2e-mac` is opt-in via the `e2e` PR label or runs on push to main.
+
+When adding a new feature that touches an external system (OAuth, deep links, file system, native notification): add a Layer 1 mockIPC test for the JS shim AND a Layer 4 / Layer 5 test for the OS-level behavior. Don't ship without both.
+
 ## Database
 
 - Schema: `packages/database/prisma/schema.prisma`
