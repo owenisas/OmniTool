@@ -11,15 +11,11 @@ export function isTauri(): boolean {
 /**
  * Send a native notification (falls back to web Notification API).
  */
-export async function nativeNotify(
-  title: string,
-  body: string
-): Promise<void> {
+export async function nativeNotify(title: string, body: string): Promise<void> {
   if (isTauri()) {
     try {
-      const { sendNotification } = await import(
-        "@tauri-apps/plugin-notification"
-      );
+      const { sendNotification } =
+        await import("@tauri-apps/plugin-notification");
       await sendNotification({ title, body });
       return;
     } catch {
@@ -57,9 +53,8 @@ export async function checkForUpdates(): Promise<{
 export async function setClipboard(text: string): Promise<void> {
   if (isTauri()) {
     try {
-      const { writeText } = await import(
-        "@tauri-apps/plugin-clipboard-manager"
-      );
+      const { writeText } =
+        await import("@tauri-apps/plugin-clipboard-manager");
       await writeText(text);
       return;
     } catch {
@@ -90,10 +85,16 @@ export async function openInBrowser(url: string): Promise<void> {
 
 /**
  * Navigate to an OAuth authorize URL.
- * Always navigates in the current window so the callback has access to
- * the app's auth cookies (required for session validation).
- * The user may need to log into the provider (GitHub, Notion) in the
- * webview on first use — this is a one-time step.
+ *
+ * On web: navigates in the current window.
+ * In Tauri desktop: also navigates in the current window. The Rust layer
+ * intercepts any external URL navigation (github.com, notion.com, etc.)
+ * and opens it in the system browser automatically. This means:
+ * 1. Webview navigates to /api/integrations/github/authorize (localhost — allowed)
+ * 2. Server redirects to https://github.com/login/oauth/...
+ * 3. Rust intercepts the github.com navigation → opens in system browser
+ * 4. User authorizes in browser (already logged into GitHub there)
+ * 5. Callback returns to localhost → server processes → deep link back to app
  */
 export function startOAuthFlow(authorizeUrl: string): void {
   window.location.href = authorizeUrl;
@@ -103,7 +104,7 @@ export function startOAuthFlow(authorizeUrl: string): void {
  * Listen for deep link events (no-op on web).
  */
 export async function onDeepLink(
-  callback: (urls: string[]) => void
+  callback: (urls: string[]) => void,
 ): Promise<(() => void) | null> {
   if (!isTauri()) return null;
   try {
@@ -112,5 +113,18 @@ export async function onDeepLink(
     return unlisten;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read any deep link that launched/focused the app.
+ */
+export async function getCurrentDeepLinks(): Promise<string[]> {
+  if (!isTauri()) return [];
+  try {
+    const { getCurrent } = await import("@tauri-apps/plugin-deep-link");
+    return (await getCurrent()) ?? [];
+  } catch {
+    return [];
   }
 }

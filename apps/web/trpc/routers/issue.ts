@@ -5,6 +5,7 @@ import {
   teamProtectedProcedure,
 } from "../init";
 import { createIssueSchema, updateIssueSchema } from "@omnitool/shared/validators";
+import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
 
 const ISSUE_STATUSES = [
   "OPEN",
@@ -127,25 +128,55 @@ export const issueRouter = createTRPCRouter({
       const prefix = project.slug.toUpperCase().slice(0, 4);
       const identifier = `${prefix}-${count + 1}`;
 
-      return ctx.prisma.issue.create({
+      const issue = await ctx.prisma.issue.create({
         data: {
           ...input,
           identifier,
           reporterId: ctx.userId,
         },
       });
+
+      emitActivityEvent({
+        type: "issue.created",
+        actorId: ctx.userId,
+        teamId: project.teamId,
+        projectId: input.projectId,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { title: issue.title, identifier, priority: issue.priority },
+      });
+
+      return issue;
     }),
 
   update: protectedProcedure
     .input(updateIssueSchema)
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      return ctx.prisma.issue.update({
+      const issue = await ctx.prisma.issue.update({
         where: { id },
         data: {
           ...data,
           ...(data.status === "RESOLVED" ? { resolvedAt: new Date() } : {}),
         },
       });
+
+      const isClosed = data.status === "RESOLVED" || data.status === "CLOSED" || data.status === "WONT_FIX";
+      const teamId = await getProjectTeamId(issue.projectId);
+      emitActivityEvent({
+        type: isClosed ? "issue.closed" : "issue.updated",
+        actorId: ctx.userId,
+        teamId: teamId ?? undefined,
+        projectId: issue.projectId,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: {
+          title: issue.title,
+          identifier: issue.identifier,
+          ...(data.status && { status: data.status }),
+        },
+      });
+
+      return issue;
     }),
 });

@@ -2,25 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { encrypt } from "@omnitool/integrations";
 import { prisma } from "@omnitool/database";
+import { isDesktopOAuthState, verifyDesktopOAuthState } from "@/lib/oauth-state";
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.redirect(new URL("/login", process.env.AUTH_URL));
-  }
-
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
-  const storedState = request.cookies.get("notion-oauth-state")?.value;
 
-  if (!code || !state || state !== storedState) {
+  if (!code || !state) {
     return NextResponse.redirect(
-      new URL(
-        "/settings/integrations?error=invalid_state",
-        process.env.AUTH_URL
-      )
+      new URL("/settings/integrations?error=invalid_state", process.env.AUTH_URL)
     );
+  }
+
+  // Determine user identity: desktop flow uses signed state, web flow uses session cookie.
+  let userId: string;
+  const isDesktop = isDesktopOAuthState(state);
+
+  if (isDesktop) {
+    const verifiedUserId = verifyDesktopOAuthState(state);
+    if (!verifiedUserId) {
+      return NextResponse.redirect(
+        new URL("/settings/integrations?error=invalid_state", process.env.AUTH_URL)
+      );
+    }
+    userId = verifiedUserId;
+  } else {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.redirect(new URL("/login", process.env.AUTH_URL));
+    }
+    const storedState = request.cookies.get("notion-oauth-state")?.value;
+    if (state !== storedState) {
+      return NextResponse.redirect(
+        new URL("/settings/integrations?error=invalid_state", process.env.AUTH_URL)
+      );
+    }
+    userId = session.user.id;
   }
 
   try {
@@ -54,6 +72,9 @@ export async function GET(request: NextRequest) {
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
       console.error("[notion-oauth] Token error:", tokenData.error);
+      if (isDesktop) {
+        return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=error");
+      }
       return NextResponse.redirect(
         new URL(
           "/settings/integrations?error=token_exchange",
@@ -87,7 +108,7 @@ export async function GET(request: NextRequest) {
     await prisma.connectedAccount.upsert({
       where: {
         userId_provider: {
-          userId: session.user.id,
+          userId: userId,
           provider: "NOTION",
         },
       },
@@ -99,7 +120,7 @@ export async function GET(request: NextRequest) {
         metadata,
       },
       create: {
-        userId: session.user.id,
+        userId: userId,
         provider: "NOTION",
         providerAccountId: String(workspaceId),
         encryptedAccessToken: encryptedToken,
@@ -109,6 +130,12 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Desktop flow: redirect to deep link so focus returns to the app.
+    // Web flow: redirect to integrations page.
+    if (isDesktop) {
+      return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=success");
+    }
+
     const response = NextResponse.redirect(
       new URL("/settings/integrations?connected=notion", process.env.AUTH_URL)
     );
@@ -117,6 +144,9 @@ export async function GET(request: NextRequest) {
     return response;
   } catch (error) {
     console.error("[notion-oauth] Callback error:", error);
+    if (isDesktop) {
+      return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=error");
+    }
     return NextResponse.redirect(
       new URL(
         "/settings/integrations?error=callback_failed",

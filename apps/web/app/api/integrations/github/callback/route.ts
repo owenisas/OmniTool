@@ -2,25 +2,55 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { encrypt } from "@omnitool/integrations";
 import { prisma } from "@omnitool/database";
+import {
+  isDesktopOAuthState,
+  verifyDesktopOAuthState,
+} from "@/lib/oauth-state";
 
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.redirect(new URL("/login", process.env.AUTH_URL));
-  }
-
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
-  const storedState = request.cookies.get("github-oauth-state")?.value;
 
-  if (!code || !state || state !== storedState) {
+  if (!code || !state) {
     return NextResponse.redirect(
       new URL(
         "/settings/integrations?error=invalid_state",
-        process.env.AUTH_URL
-      )
+        process.env.AUTH_URL,
+      ),
     );
+  }
+
+  // Determine user identity: desktop flow uses signed state, web flow uses session cookie.
+  let userId: string;
+  const isDesktop = isDesktopOAuthState(state);
+
+  if (isDesktop) {
+    const verifiedUserId = verifyDesktopOAuthState(state);
+    if (!verifiedUserId) {
+      return NextResponse.redirect(
+        new URL(
+          "/settings/integrations?error=invalid_state",
+          process.env.AUTH_URL,
+        ),
+      );
+    }
+    userId = verifiedUserId;
+  } else {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.redirect(new URL("/login", process.env.AUTH_URL));
+    }
+    const storedState = request.cookies.get("github-oauth-state")?.value;
+    if (state !== storedState) {
+      return NextResponse.redirect(
+        new URL(
+          "/settings/integrations?error=invalid_state",
+          process.env.AUTH_URL,
+        ),
+      );
+    }
+    userId = session.user.id;
   }
 
   try {
@@ -41,17 +71,22 @@ export async function GET(request: NextRequest) {
           code,
           redirect_uri: redirectUri,
         }),
-      }
+      },
     );
 
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
       console.error("[github-oauth] Token error:", tokenData.error);
+      if (isDesktop) {
+        return NextResponse.redirect(
+          "omnitool://oauth-complete?provider=github&status=error",
+        );
+      }
       return NextResponse.redirect(
         new URL(
           "/settings/integrations?error=token_exchange",
-          process.env.AUTH_URL
-        )
+          process.env.AUTH_URL,
+        ),
       );
     }
 
@@ -82,7 +117,7 @@ export async function GET(request: NextRequest) {
     await prisma.connectedAccount.upsert({
       where: {
         userId_provider: {
-          userId: session.user.id,
+          userId: userId,
           provider: "GITHUB",
         },
       },
@@ -95,7 +130,7 @@ export async function GET(request: NextRequest) {
         metadata,
       },
       create: {
-        userId: session.user.id,
+        userId: userId,
         provider: "GITHUB",
         providerAccountId: String(ghUser.id),
         encryptedAccessToken: encryptedToken,
@@ -113,7 +148,7 @@ export async function GET(request: NextRequest) {
 
     if (
       placeholderUser &&
-      placeholderUser.id !== session.user.id &&
+      placeholderUser.id !== userId &&
       !placeholderUser.supabaseAuthId
     ) {
       // Placeholder was created during GitHub org import — merge into real user
@@ -127,7 +162,7 @@ export async function GET(request: NextRequest) {
           const existing = await tx.teamMember.findUnique({
             where: {
               userId_teamId: {
-                userId: session.user.id,
+                userId: userId,
                 teamId: m.teamId,
               },
             },
@@ -137,7 +172,7 @@ export async function GET(request: NextRequest) {
             // Real user not in this team — transfer membership
             await tx.teamMember.update({
               where: { id: m.id },
-              data: { userId: session.user.id },
+              data: { userId: userId },
             });
           } else {
             // Real user already in team — keep higher role
@@ -160,15 +195,15 @@ export async function GET(request: NextRequest) {
         // Reassign tasks, issues, notes from placeholder to real user
         await tx.task.updateMany({
           where: { assigneeId: placeholderUser.id },
-          data: { assigneeId: session.user.id },
+          data: { assigneeId: userId },
         });
         await tx.issue.updateMany({
           where: { assigneeId: placeholderUser.id },
-          data: { assigneeId: session.user.id },
+          data: { assigneeId: userId },
         });
         await tx.note.updateMany({
           where: { authorId: placeholderUser.id },
-          data: { authorId: session.user.id },
+          data: { authorId: userId },
         });
 
         // Clear unique fields then delete placeholder
@@ -182,26 +217,40 @@ export async function GET(request: NextRequest) {
 
     // Update real user's GitHub info
     await prisma.user.update({
-      where: { id: session.user.id },
+      where: { id: userId },
       data: {
         githubUserId: ghUser.id,
         githubLogin: ghUser.login,
+        avatarUrl: ghUser.avatar_url ?? undefined,
       },
     });
 
+    // Desktop flow: redirect to deep link so focus returns to the app.
+    // Web flow: redirect to integrations page.
+    if (isDesktop) {
+      return NextResponse.redirect(
+        "omnitool://oauth-complete?provider=github&status=success",
+      );
+    }
+
     const response = NextResponse.redirect(
-      new URL("/settings/integrations?connected=github", process.env.AUTH_URL)
+      new URL("/settings/integrations?connected=github", process.env.AUTH_URL),
     );
     // Clear the state cookie
     response.cookies.delete("github-oauth-state");
     return response;
   } catch (error) {
     console.error("[github-oauth] Callback error:", error);
+    if (isDesktop) {
+      return NextResponse.redirect(
+        "omnitool://oauth-complete?provider=github&status=error",
+      );
+    }
     return NextResponse.redirect(
       new URL(
         "/settings/integrations?error=callback_failed",
-        process.env.AUTH_URL
-      )
+        process.env.AUTH_URL,
+      ),
     );
   }
 }

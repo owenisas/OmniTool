@@ -34,7 +34,7 @@ supabase/                 # Supabase config.toml + migrations (managed via `supa
 
 ## Commands
 
-When the user says "run" or "run the app", always run `pnpm dev:desktop` (the desktop app). The web dev server on :3000 must be running first — start it if it isn't.
+When the user says "run" or "run the app", always run `pnpm build:desktop` (production desktop build). This builds the standalone Next.js server, bundles it with the Node.js sidecar, and produces the distributable app. Dev mode (`pnpm dev:desktop`) is too slow for testing — it compiles on-demand via Turbopack. Always use the production build to confirm the real user experience.
 
 ```bash
 pnpm dev            # Start all dev servers
@@ -100,7 +100,25 @@ pnpm typecheck      # Type-check all packages
 
 - **Layout**: `apps/web/app/(dashboard)/settings/layout.tsx` wraps all `/settings/*` pages with `apps/web/components/settings/settings-nav.tsx` (grouped sidebar + mobile select).
 - **Routes**: Overview `/settings`; Profile; Security (Supabase password change); Team; Notifications (browser `Notification` permission helpers in `apps/web/lib/web-notifications.ts`, UI in `components/notifications/`); Appearance (theme); Integrations; About (`NEXT_PUBLIC_APP_VERSION`).
-- **Top bar**: `NotificationBellMenu` for quick permission access (`apps/web/components/layout/topbar.tsx`).
+
+## Layout Chrome (Topbar / Sidebar)
+
+The dashboard layout (`apps/web/app/(dashboard)/layout.tsx`) renders `Sidebar` (desktop) + `MobileDrawer` (mobile) + `Topbar` + `MobileNav` (bottom tab bar).
+
+### Topbar — `apps/web/components/layout/topbar.tsx`
+
+Stripped-down: hamburger (mobile) + breadcrumb path bar (left, flexes) + `RunningTimer` pill + actions slot (right). No bell, avatar, or sign-out — those moved off the topbar.
+
+- **Breadcrumbs** (`apps/web/components/layout/breadcrumbs.tsx`): auto-derived from `usePathname()`. Uses a `LABELS` map (segment → friendly name) and a `prettify()` fallback. Dynamic IDs (long alphanumeric / cuid-shaped) render as `#abc123` short hashes. **When you add a new top-level route or rename a segment, update the `LABELS` map**, otherwise the crumb falls back to Title-Cased segment text. To show a real entity title in place of an id (e.g. note title for `/notes/[noteId]`), the page must inject its own breadcrumbs — currently not wired; auto-hashing is the default.
+- **Actions slot**: `<div id="topbar-slot-actions">` in the topbar is a portal target. Pages inject buttons via `<TopbarSlot target="actions">{...}</TopbarSlot>` from `apps/web/components/layout/topbar-slot.tsx`. **When adding a new page-level primary action (e.g. "+ New X"), prefer rendering it through `TopbarSlot` instead of inside the page body** so it lives in the same place across all routes. Example wired in `apps/web/app/(dashboard)/notes/notes-page-client.tsx` — "New note" button.
+- **Sign out**: lives in `apps/web/components/layout/sign-out-button.tsx`, rendered at the bottom of `Sidebar` (rail/expanded variants) and `MobileDrawer` (drawer variant). Calls `createSupabaseBrowserClient().auth.signOut()` then `window.location.href = "/login"`.
+- **Notifications**: full UI lives at `/settings/notifications` (`NotificationPermissionPanel` from `apps/web/components/notifications/notification-permission-panel.tsx`). The old `NotificationBellMenu` was removed; the panel component is unchanged and reusable.
+
+### Sidebar — `apps/web/components/layout/sidebar.tsx`
+
+- **Nav definition**: `navSections` (top sections) + `bottomNav` (Profile, Settings) are exported. `MobileDrawer` re-imports them. **When adding a new dashboard route, add an entry to the matching section in `navSections`** (or `bottomNav` for account-y items).
+- **Auto-collapse rule**: `shouldAutoCollapse(pathname)` in `apps/web/components/layout/sidebar-context.tsx`. Currently matches `/^\/notes(\/.*)?$/` so notes get full editor width. **To add focus-mode auto-collapse for another route, extend the regex** (e.g. union with `/agents/chat`). User can override the rule per-page via the chevron toggle; the override resets on next pathname change.
+- **Width transition**: outer `<aside>` uses `transition-[width] duration-300 ease-in-out`. Inner content swaps between rail and expanded markup based on `renderRail`; the swap itself is instant (only width is animated).
 
 ## Database
 
@@ -114,6 +132,24 @@ pnpm typecheck      # Type-check all packages
 - Default admin: admin@omnitool.dev / admin123!
 - User model has `supabaseAuthId` (unique) linking to Supabase Auth. `passwordHash` column is deprecated (kept for migration safety).
 
+### Supabase CLI
+
+This project uses the **Supabase CLI** (`supabase`) alongside Prisma. Split:
+
+- **Schema (tables, columns, indexes, FKs)** → Prisma. Run `pnpm db:push` after editing `packages/database/prisma/schema.prisma`. Pushes directly to the Supabase Postgres at `aws-1-us-east-1.pooler.supabase.com:5432` (DIRECT_URL).
+- **Auth + redirect URLs + project config** → Supabase CLI. Edit `supabase/config.toml`, then push:
+  ```bash
+  supabase config push --project-ref irtrdplptcxvdbzabjri
+  ```
+- **Auth migrations / SQL beyond the Prisma model** → `supabase/migrations/*.sql` (managed via `supabase migration new <name>` + `supabase db push`).
+- **Local dev stack** → `supabase start` boots a local Postgres + GoTrue if you want offline dev. Not required for normal app dev (we point at the hosted Supabase).
+
+Recipe for any schema change:
+1. Edit `packages/database/prisma/schema.prisma`
+2. `pnpm db:generate` — regenerate Prisma client
+3. `pnpm db:push` — apply to Supabase Postgres
+4. (Only if changing auth flows / redirect URLs) `supabase config push --project-ref irtrdplptcxvdbzabjri`
+
 ## Local-First Sync
 
 - Sync configuration lives in `packages/sync`
@@ -122,6 +158,25 @@ pnpm typecheck      # Type-check all packages
 - Server-only domains: connected integration tokens, AI conversations/messages, GitHub import logs
 - Bootstrap route: `apps/web/app/api/sync/token/route.ts`
 - Keep secrets, OAuth tokens, integration API keys, webhook secrets, and AI provider keys server-only
+
+## Background Tasks (long-running operations)
+
+**Rule**: any operation > ~3s (imports, summaries, batch ops, AI generations beyond chat stream) MUST run as a background task. Never block the UI behind a modal spinner.
+
+- **Store**: `apps/web/lib/background-tasks/store.ts` — Zustand `{ id, label, status, result, error, startedAt }`. Actions: `start/update/finish/fail/dismiss/clearCompleted`. Auto-prune 5min, cap 50.
+- **Runner**: `apps/web/lib/background-tasks/run.ts` — `runBackgroundTask({ id, label, work, successToast, href?, onViewResult?, onSuccess?, onError? })`. Returns the work promise.
+- **UI**: `apps/web/components/layout/background-tasks-indicator.tsx` mounted in `Topbar` — pill w/ spinner+count, popover w/ elapsed time + dismiss + "View →".
+- **Toasts**: `sonner` mounted in `apps/web/app/providers.tsx`. Runner fires success/error toasts automatically.
+
+**Pattern for new long-running flows**:
+1. Click handler queues `runBackgroundTask({ work: () => mutation.mutateAsync(...) })`
+2. Close the dialog/UI immediately — do NOT `await` the mutation in the handler
+3. Pass `successToast` (string or fn of result) and either `href` (navigate target) or `onViewResult` (custom callback, e.g. reopen dialog with cached result)
+4. Put React Query `utils.x.invalidate()` calls inside `onSuccess` of the runner, not the dialog
+
+**Existing examples**: Notion import (`notion-import-dialog.tsx`), GitHub import (`github-import-dialog.tsx`), Daily code summary (`daily-summary-dialog.tsx`). Mirror this pattern when adding new flows.
+
+**Known limits**: refresh during task = lose UI feedback (server still completes); no real-time progress %; single tab only.
 
 ## Key Conventions
 

@@ -38,6 +38,8 @@ packages/database/src/generated/
 
 # tauri
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/node-*
+apps/desktop/src-tauri/resources/
 
 # serwist service worker build artifacts
 apps/web/public/sw.js
@@ -48,3 +50,9 @@ apps/web/public/serwist-worker-*.js
 coverage/
 .vercel
 supabase/.temp/
+
+# playwright MCP logs
+.playwright-mcp/
+
+# debug inspection scripts
+packages/database/inspect-*.mjs

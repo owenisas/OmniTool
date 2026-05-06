@@ -54,6 +54,48 @@ export const teamActivityRouter = createTRPCRouter({
     }),
 
   /**
+   * Get a single user's daily summary for a specific date.
+   */
+  getOne: teamProtectedProcedure
+    .input(
+      z.object({
+        userId: z.string().cuid(),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const summary = await ctx.prisma.dailyCodingSummary.findFirst({
+        where: {
+          teamId: ctx.teamId,
+          userId: input.userId,
+          date: input.date,
+        },
+        include: {
+          user: {
+            select: { id: true, name: true, email: true, avatarUrl: true },
+          },
+        },
+      });
+
+      if (!summary) return null;
+
+      return {
+        id: summary.id,
+        userId: summary.userId,
+        date: summary.date,
+        sessionCount: summary.sessionCount,
+        totalMessages: summary.totalMessages,
+        sources: JSON.parse(summary.sources) as string[],
+        title: summary.title,
+        overview: summary.overview,
+        keyTopics: JSON.parse(summary.keyTopics) as string[],
+        actionItems: JSON.parse(summary.actionItems) as string[],
+        risks: JSON.parse(summary.risks) as string[],
+        user: summary.user,
+      };
+    }),
+
+  /**
    * Get dates that have activity within a range (for date nav indicators).
    */
   getDateRange: teamProtectedProcedure

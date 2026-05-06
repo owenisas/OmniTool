@@ -155,6 +155,8 @@ site_url = "https://omnitool-flame.vercel.app"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
 additional_redirect_urls = [
   "http://localhost:3000/**",
+  "http://localhost:19283/**",
+  "omnitool://auth/callback**",
   "https://omnitool-flame.vercel.app/**",
   "https://omnitool.reunifylabs.com/**",
 ]
@@ -330,6 +332,15 @@ url = ""
 skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
 email_optional = false
+
+[auth.external.github]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
+# DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
+secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
+# Use Supabase's default callback URL:
+# https://irtrdplptcxvdbzabjri.supabase.co/auth/v1/callback
+redirect_uri = ""
 
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS, EIP-4361) standard.
 # You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.

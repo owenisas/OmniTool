@@ -13,6 +13,8 @@ import {
 import { navigation, bottomNav, navigationActive } from "./sidebar";
 import { TeamSwitcher } from "./team-switcher";
 import { useSidebar } from "./sidebar-context";
+import { SignOutButton } from "./sign-out-button";
+import { SidebarNoteTree } from "./sidebar-note-tree";
 import { OmniToolLogo } from "@/components/icons/brand-icons";
 
 export function MobileDrawer() {
@@ -41,7 +43,10 @@ export function MobileDrawer() {
         <TeamSwitcher />
 
         {/* Main navigation */}
-        <nav className="flex-1 space-y-0.5 p-3" aria-label="Main navigation">
+        <nav
+          className="flex-1 space-y-0.5 overflow-y-auto p-3"
+          aria-label="Main navigation"
+        >
           {navigation.map((item) => {
             const isActive = navigationActive(pathname, item.href);
             return (
@@ -61,6 +66,9 @@ export function MobileDrawer() {
               </Link>
             );
           })}
+          <div className="pt-3">
+            <SidebarNoteTree onAfterNavigate={close} />
+          </div>
         </nav>
 
         {/* Bottom navigation */}
@@ -84,6 +92,7 @@ export function MobileDrawer() {
               </Link>
             );
           })}
+          <SignOutButton variant="drawer" />
         </div>
       </SheetContent>
     </Sheet>

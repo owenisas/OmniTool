@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { isTauri, openInBrowser } from "@/lib/tauri";
 import { Button } from "@omnitool/ui/components/button";
 import type { Provider } from "@supabase/supabase-js";
 
@@ -43,15 +44,6 @@ const providers: {
       </svg>
     ),
   },
-  {
-    id: "notion",
-    label: "Notion",
-    icon: (
-      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L18.29 2.29c-.42-.326-.98-.7-2.055-.607L3.16 2.87c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.166V6.354c0-.606-.233-.933-.747-.886l-15.177.887c-.56.047-.748.327-.748.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952l1.448.327s0 .84-1.168.84l-3.22.186c-.094-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.454-.233 4.764 7.279v-6.44l-1.215-.14c-.093-.513.28-.886.747-.933zM2.788 1.136l13.59-1c1.635-.14 2.055-.047 3.08.7l4.25 2.986c.7.513.933.653.933 1.213v16.378c0 1.026-.373 1.632-1.68 1.726l-15.458.933c-.98.047-1.448-.093-1.962-.747l-3.127-4.066c-.56-.747-.793-1.306-.793-1.96V2.762c0-.838.374-1.54 1.167-1.626z" />
-      </svg>
-    ),
-  },
 ];
 
 interface SocialAuthButtonsProps {
@@ -69,14 +61,32 @@ export function SocialAuthButtons({
     setLoadingProvider(provider);
     try {
       const supabase = createSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithOAuth({
+      const nextUrl =
+        provider === "github"
+          ? `/settings/integrations?connect=${provider}`
+          : callbackUrl;
+      const isDesktop = isTauri();
+      const redirectTo = isDesktop
+        ? `omnitool://auth/callback?next=${encodeURIComponent(nextUrl)}`
+        : `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(nextUrl)}`;
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
-          redirectTo: `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(callbackUrl)}`,
+          redirectTo,
+          skipBrowserRedirect: isDesktop,
         },
       });
       if (error) {
         console.error(`OAuth ${provider} error:`, error.message);
+        setLoadingProvider(null);
+        return;
+      }
+
+      if (isDesktop) {
+        if (data.url) {
+          await openInBrowser(data.url);
+          return;
+        }
         setLoadingProvider(null);
       }
       // On success, browser redirects — no need to clear loading state

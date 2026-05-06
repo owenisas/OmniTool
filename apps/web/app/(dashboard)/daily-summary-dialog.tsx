@@ -10,7 +10,8 @@ import {
   DialogDescription,
 } from "@omnitool/ui/components/dialog";
 import { Badge } from "@omnitool/ui/components/badge";
-import { Sparkles, Loader2, RefreshCw, AlertTriangle, Coffee } from "lucide-react";
+import { Sparkles, RefreshCw, AlertTriangle, Coffee } from "lucide-react";
+import { runBackgroundTask } from "@/lib/background-tasks/run";
 
 interface DailySummary {
   title: string;
@@ -23,46 +24,88 @@ interface DailySummary {
   sources: string[];
 }
 
+interface SummaryResponse {
+  summary: DailySummary | null;
+}
+
+/**
+ * Generates a summary of today's coding sessions. Runs as a background
+ * task — clicking the button queues the work, surfaces a topbar pill while
+ * generating, and toasts the user when the summary is ready. The dialog
+ * opens automatically when the result is in (or via the toast "View"
+ * button if the user dismissed the auto-open).
+ *
+ * The most recent result is cached in component state so subsequent button
+ * clicks reopen the cached dialog instantly; "Regenerate" forces a refetch.
+ */
 export function DailySummaryButton() {
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState<DailySummary | null>(null);
   const [noSessions, setNoSessions] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
-  async function generate(force = false) {
-    setLoading(true);
-    setError(null);
-    setNoSessions(false);
+  function generate(force: boolean) {
+    if (running) return;
+    setRunning(true);
 
-    try {
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const res = await fetch("/api/coding-sessions/daily-summary", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timezone, force }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to generate summary");
-      if (!data.summary) {
-        setNoSessions(true);
-        setSummary(null);
-      } else {
-        setSummary(data.summary);
-        setNoSessions(false);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
+    void runBackgroundTask<SummaryResponse>({
+      id: `daily-summary-${Date.now()}`,
+      kind: "daily-summary",
+      label: "Summarizing today's coding sessions",
+      successToast: (r) =>
+        r.summary
+          ? `Daily summary ready: ${r.summary.title}`
+          : "No coding sessions found for today",
+      onViewResult: (r) => {
+        if (r.summary) {
+          setSummary(r.summary);
+          setNoSessions(false);
+        } else {
+          setSummary(null);
+          setNoSessions(true);
+        }
+        setOpen(true);
+      },
+      work: async () => {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        const res = await fetch("/api/coding-sessions/daily-summary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timezone, force }),
+        });
+        const data = (await res.json()) as
+          | SummaryResponse
+          | { error?: string };
+        if (!res.ok) {
+          throw new Error(
+            ("error" in data && data.error) || "Failed to generate summary",
+          );
+        }
+        return data as SummaryResponse;
+      },
+      onSuccess: (r) => {
+        if (r.summary) {
+          setSummary(r.summary);
+          setNoSessions(false);
+        } else {
+          setSummary(null);
+          setNoSessions(true);
+        }
+        setRunning(false);
+      },
+      onError: () => {
+        setRunning(false);
+      },
+    });
   }
 
   function handleClick() {
-    setOpen(true);
-    if (!summary && !noSessions) {
-      generate(false);
+    // If we already have a cached summary, reopen the dialog without re-running.
+    if (summary || noSessions) {
+      setOpen(true);
+      return;
     }
+    generate(false);
   }
 
   return (
@@ -71,11 +114,14 @@ export function DailySummaryButton() {
         variant="outline"
         size="sm"
         onClick={handleClick}
+        disabled={running}
         className="gap-2"
       >
         <Sparkles className="h-4 w-4" />
-        <span className="hidden sm:inline">Summarize my day</span>
-        <span className="sm:hidden">My day</span>
+        <span className="hidden sm:inline">
+          {running ? "Summarizing…" : "Summarize my day"}
+        </span>
+        <span className="sm:hidden">{running ? "..." : "My day"}</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
@@ -96,32 +142,7 @@ export function DailySummaryButton() {
           </DialogHeader>
 
           <div className="mt-4 space-y-6">
-            {/* Loading state */}
-            {loading && (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <Loader2 className="h-8 w-8 animate-spin mb-3" />
-                <p className="text-sm">Scanning sessions &amp; generating summary...</p>
-              </div>
-            )}
-
-            {/* Error state */}
-            {!loading && error && (
-              <div className="flex flex-col items-center justify-center py-12 text-destructive">
-                <AlertTriangle className="h-8 w-8 mb-3" />
-                <p className="text-sm font-medium">{error}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-4"
-                  onClick={() => generate(true)}
-                >
-                  Retry
-                </Button>
-              </div>
-            )}
-
-            {/* No sessions state */}
-            {!loading && !error && noSessions && (
+            {noSessions && (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <Coffee className="h-8 w-8 mb-3" />
                 <p className="text-sm font-medium">
@@ -133,17 +154,14 @@ export function DailySummaryButton() {
               </div>
             )}
 
-            {/* Summary display */}
-            {!loading && !error && summary && (
+            {summary && (
               <>
-                {/* Overview */}
                 <div>
                   <p className="text-sm leading-relaxed text-foreground">
                     {summary.overview}
                   </p>
                 </div>
 
-                {/* Key Topics */}
                 {summary.keyTopics.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
@@ -151,7 +169,11 @@ export function DailySummaryButton() {
                     </h4>
                     <div className="flex flex-wrap gap-1.5">
                       {summary.keyTopics.map((topic) => (
-                        <Badge key={topic} variant="secondary" className="text-xs">
+                        <Badge
+                          key={topic}
+                          variant="secondary"
+                          className="text-xs"
+                        >
                           {topic}
                         </Badge>
                       ))}
@@ -159,7 +181,6 @@ export function DailySummaryButton() {
                   </div>
                 )}
 
-                {/* Action Items */}
                 {summary.actionItems.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
@@ -179,7 +200,6 @@ export function DailySummaryButton() {
                   </div>
                 )}
 
-                {/* Risks */}
                 {summary.risks.length > 0 && (
                   <div>
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-600 mb-2">
@@ -199,17 +219,19 @@ export function DailySummaryButton() {
                   </div>
                 )}
 
-                {/* Refresh button */}
                 <div className="flex justify-end pt-2 border-t">
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => generate(true)}
-                    disabled={loading}
+                    onClick={() => {
+                      setOpen(false);
+                      generate(true);
+                    }}
+                    disabled={running}
                     className="gap-2 text-xs text-muted-foreground"
                   >
                     <RefreshCw className="h-3 w-3" />
-                    Regenerate
+                    Regenerate (runs in background)
                   </Button>
                 </div>
               </>

@@ -3,6 +3,12 @@
   "identifier": "default",
   "description": "OmniTool desktop capability set.",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://omnitool.reunifylabs.com/*",
+      "http://localhost:19283/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "updater:default",

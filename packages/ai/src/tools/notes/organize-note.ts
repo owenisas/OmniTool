@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@omnitool/database";
+import { snapshotNoteBeforeAIEdit } from "../../utils/snapshot-note";
 
 export function makeOrganizeNoteTool(userId: string) {
   return tool({
@@ -45,6 +46,11 @@ export function makeOrganizeNoteTool(userId: string) {
             create: { name: tag },
           })),
         };
+      }
+
+      // Title change is editorial — snapshot before applying.
+      if (title !== undefined && title !== existing.title) {
+        await snapshotNoteBeforeAIEdit({ noteId, userId, aiTool: "organizeNote" });
       }
 
       const note = await prisma.note.update({

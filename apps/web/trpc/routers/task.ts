@@ -5,6 +5,7 @@ import {
   teamProtectedProcedure,
 } from "../init";
 import { createTaskSchema, updateTaskSchema, moveTaskSchema } from "@omnitool/shared/validators";
+import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
 
 export const taskRouter = createTRPCRouter({
   listMineForTeam: teamProtectedProcedure
@@ -88,31 +89,62 @@ export const taskRouter = createTRPCRouter({
   create: protectedProcedure
     .input(createTaskSchema)
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.task.create({
+      const task = await ctx.prisma.task.create({
         data: {
           ...input,
           creatorId: ctx.userId,
         },
       });
+
+      const teamId = await getProjectTeamId(input.projectId);
+      emitActivityEvent({
+        type: "task.created",
+        actorId: ctx.userId,
+        teamId: teamId ?? undefined,
+        projectId: input.projectId,
+        subjectType: "task",
+        subjectId: task.id,
+        payload: { title: task.title, status: task.status },
+      });
+
+      return task;
     }),
 
   update: protectedProcedure
     .input(updateTaskSchema)
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      return ctx.prisma.task.update({
+      const task = await ctx.prisma.task.update({
         where: { id },
         data: {
           ...data,
           ...(data.status === "DONE" ? { completedAt: new Date() } : {}),
         },
       });
+
+      const isCompleted = data.status === "DONE";
+      const teamId = await getProjectTeamId(task.projectId);
+      emitActivityEvent({
+        type: isCompleted ? "task.completed" : "task.updated",
+        actorId: ctx.userId,
+        teamId: teamId ?? undefined,
+        projectId: task.projectId,
+        subjectType: "task",
+        subjectId: task.id,
+        payload: {
+          title: task.title,
+          ...(data.status && { status: data.status }),
+          ...(data.assigneeId && { assigneeId: data.assigneeId }),
+        },
+      });
+
+      return task;
     }),
 
   move: protectedProcedure
     .input(moveTaskSchema)
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.task.update({
+      const task = await ctx.prisma.task.update({
         where: { id: input.id },
         data: {
           status: input.status,
@@ -120,11 +152,38 @@ export const taskRouter = createTRPCRouter({
           ...(input.status === "DONE" ? { completedAt: new Date() } : { completedAt: null }),
         },
       });
+
+      const isCompleted = input.status === "DONE";
+      const teamId = await getProjectTeamId(task.projectId);
+      emitActivityEvent({
+        type: isCompleted ? "task.completed" : "task.updated",
+        actorId: ctx.userId,
+        teamId: teamId ?? undefined,
+        projectId: task.projectId,
+        subjectType: "task",
+        subjectId: task.id,
+        payload: { title: task.title, status: input.status },
+      });
+
+      return task;
     }),
 
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.task.delete({ where: { id: input.id } });
+      const task = await ctx.prisma.task.delete({ where: { id: input.id } });
+
+      const teamId = await getProjectTeamId(task.projectId);
+      emitActivityEvent({
+        type: "task.deleted",
+        actorId: ctx.userId,
+        teamId: teamId ?? undefined,
+        projectId: task.projectId,
+        subjectType: "task",
+        subjectId: input.id,
+        payload: { title: task.title },
+      });
+
+      return task;
     }),
 });

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@omnitool/database";
 import { markdownToNoteBlocks, blocksToPlainText } from "../../utils/markdown-to-blocks";
 import { findHeadingIndex, getSectionRange, getAvailableHeadings } from "../../utils/block-navigation";
+import { snapshotNoteBeforeAIEdit } from "../../utils/snapshot-note";
 
 export function makeEditNoteSectionTool(userId: string) {
   return tool({
@@ -59,6 +60,8 @@ export function makeEditNoteSectionTool(userId: string) {
       ];
 
       const contentText = blocksToPlainText(updatedBlocks);
+
+      await snapshotNoteBeforeAIEdit({ noteId, userId, aiTool: "editNoteSection" });
 
       await prisma.note.update({
         where: { id: noteId },

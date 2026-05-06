@@ -16,6 +16,10 @@
     "typecheck": {
       "dependsOn": ["^build"]
     },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
     "db:push": { "cache": false },
     "db:migrate": { "cache": false },
     "db:deploy": { "cache": false },

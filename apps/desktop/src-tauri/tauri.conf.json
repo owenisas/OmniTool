@@ -4,24 +4,13 @@
   "version": "0.0.1",
   "identifier": "dev.omnitool.app",
   "build": {
-    "beforeDevCommand": "pnpm --filter @omnitool/web dev",
+    "beforeDevCommand": "",
     "beforeBuildCommand": "node ../../scripts/desktop-before-build.mjs",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../app-shell"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "OmniTool",
-        "width": 1280,
-        "height": 832,
-        "minWidth": 1024,
-        "minHeight": 720,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -33,7 +22,8 @@
     "publisher": "Reunify",
     "category": "Productivity",
     "shortDescription": "Internal productivity and performance tracking app",
-    "longDescription": "OmniTool is an internal app for performance tracking, issue tracking, notes, and AI agents."
+    "longDescription": "OmniTool is an internal app for performance tracking, issue tracking, notes, and AI agents.",
+    "resources": ["resources/"]
   },
   "plugins": {
     "updater": {

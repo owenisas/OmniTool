@@ -3,6 +3,8 @@ export {
   blocksToPlainText,
 } from "./markdown-to-blocks";
 
+export { markdownToBlocksServer } from "./markdown-to-blocks-server";
+
 export {
   extractBlockText,
   findHeadingIndex,

@@ -3,6 +3,7 @@ import superjson from "superjson";
 import { auth } from "@/lib/auth";
 import { prisma } from "@omnitool/database";
 import { getActiveTeamFromCookie } from "@/lib/team-cookie";
+import { noteMutationLimiter } from "@/lib/rate-limit";
 
 export const createTRPCContext = async (opts: { headers: Headers }) => {
   const session = await auth();
@@ -35,6 +36,35 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
     },
   });
 });
+
+/**
+ * Note-mutation procedure: protected + per-user Upstash rate limit.
+ *
+ * Budget: 120 req/min/user (`noteMutationLimiter`). Editor autosave debounces
+ * to ~1/s during active typing, so a heavy 2-min editing burst stays well
+ * under cap. Scripted loops or runaway clients are throttled with
+ * `TOO_MANY_REQUESTS` so the client can back off instead of the DB melting.
+ *
+ * Falls open (no enforcement) when Upstash env vars are not set, mirroring
+ * the existing OAuth/login limiter behaviour.
+ */
+export const noteMutationProcedure = protectedProcedure.use(
+  async ({ ctx, next }) => {
+    if (noteMutationLimiter) {
+      const { success, reset } = await noteMutationLimiter.limit(
+        `user:${ctx.userId}`,
+      );
+      if (!success) {
+        const retryAfterSec = Math.max(1, Math.ceil((reset - Date.now()) / 1000));
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Slow down — try again in ${retryAfterSec}s.`,
+        });
+      }
+    }
+    return next();
+  },
+);
 
 export const teamProtectedProcedure = protectedProcedure.use(
   async ({ ctx, next }) => {

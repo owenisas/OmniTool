@@ -136,3 +136,101 @@ export async function listOrgMembers(octokit: Octokit, org: string) {
     avatarUrl: member.avatar_url,
   }));
 }
+
+// ─── Webhook management ────────────────────────────────────
+
+/**
+ * Register a webhook on a GitHub repository for push, PR, and issue events.
+ * Returns the webhook ID for future management (update/delete).
+ */
+export async function createRepoWebhook(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  webhookUrl: string,
+  secret: string
+): Promise<{ id: number; active: boolean }> {
+  const { data } = await octokit.rest.repos.createWebhook({
+    owner,
+    repo,
+    config: {
+      url: webhookUrl,
+      content_type: "json",
+      secret,
+      insecure_ssl: "0",
+    },
+    events: ["push", "pull_request", "issues", "issue_comment"],
+    active: true,
+  });
+  return { id: data.id, active: data.active };
+}
+
+/**
+ * Delete a webhook from a GitHub repository.
+ */
+export async function deleteRepoWebhook(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  hookId: number
+): Promise<void> {
+  await octokit.rest.repos.deleteWebhook({ owner, repo, hook_id: hookId });
+}
+
+// ─── GitHub Issue operations (outbound) ────────────────────
+
+/**
+ * Create an issue on a GitHub repository.
+ */
+export async function createGitHubIssue(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  opts: { title: string; body?: string; labels?: string[] }
+): Promise<{ number: number; id: number; htmlUrl: string }> {
+  const { data } = await octokit.rest.issues.create({
+    owner,
+    repo,
+    title: opts.title,
+    body: opts.body,
+    labels: opts.labels,
+  });
+  return { number: data.number, id: data.id, htmlUrl: data.html_url };
+}
+
+/**
+ * Update an existing GitHub issue (title, body, state, labels).
+ */
+export async function updateGitHubIssue(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  opts: { title?: string; body?: string; state?: "open" | "closed"; labels?: string[] }
+): Promise<void> {
+  await octokit.rest.issues.update({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    ...opts,
+  });
+}
+
+/**
+ * Add a comment to a GitHub issue or PR.
+ */
+export async function addGitHubComment(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  body: string
+): Promise<{ id: number }> {
+  const { data } = await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    body,
+  });
+  return { id: data.id };
+}

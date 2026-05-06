@@ -51,3 +51,29 @@ export const apiLimiter = redis
       prefix: "ratelimit:api",
     })
   : null;
+
+/**
+ * Note mutation rate limiter: per-user budget for editor autosave + tree
+ * mutations. Autosave fires every ~1s on change; we allow 120/min to give
+ * heavy editing room while still capping runaway loops or scripted abuse.
+ */
+export const noteMutationLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(120, "60 s"),
+      analytics: true,
+      prefix: "ratelimit:note-mutation",
+    })
+  : null;
+
+/**
+ * Note read limiter: per-user. Prevents tight-loop abuse of paginated lists.
+ */
+export const noteReadLimiter = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(600, "60 s"),
+      analytics: true,
+      prefix: "ratelimit:note-read",
+    })
+  : null;

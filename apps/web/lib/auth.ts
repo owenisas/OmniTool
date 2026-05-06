@@ -47,12 +47,15 @@ export const auth = cache(async (): Promise<AppSession | null> => {
           meta.preferred_username ??
           supabaseUser.email?.split("@")[0] ??
           "User",
-        avatarUrl:
-          meta.avatar_url ??
-          meta.picture ??
-          null,
+        avatarUrl: meta.avatar_url ?? meta.picture ?? null,
       },
-      select: { id: true, email: true, name: true, avatarUrl: true, role: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        avatarUrl: true,
+        role: true,
+      },
     });
 
     // Auto-accept any pending team invitations for this email
@@ -80,6 +83,36 @@ export const auth = cache(async (): Promise<AppSession | null> => {
       } catch {
         // Skip if already a member (e.g. duplicate invitation race)
       }
+    }
+  } else {
+    const meta = supabaseUser.user_metadata ?? {};
+    const avatarUrl = meta.avatar_url ?? meta.picture ?? null;
+    const name = meta.name ?? meta.full_name ?? meta.preferred_username ?? null;
+    const updates: { avatarUrl?: string; name?: string } = {};
+
+    if (!appUser.avatarUrl && typeof avatarUrl === "string" && avatarUrl) {
+      updates.avatarUrl = avatarUrl;
+    }
+    if (
+      typeof name === "string" &&
+      name &&
+      (!appUser.name || appUser.name === appUser.email.split("@")[0])
+    ) {
+      updates.name = name;
+    }
+
+    if (Object.keys(updates).length > 0) {
+      appUser = await prisma.user.update({
+        where: { id: appUser.id },
+        data: updates,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          avatarUrl: true,
+          role: true,
+        },
+      });
     }
   }
 

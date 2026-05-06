@@ -6,11 +6,23 @@ import type {
   PowerSyncBackendConnector,
 } from "@powersync/common";
 
+/**
+ * Resolve the API base URL. In the desktop app, tRPC and sync calls go to
+ * the remote hosted backend (NEXT_PUBLIC_OMNITOOL_API_URL). On web, they
+ * stay relative (same origin).
+ */
+function getApiBase(): string {
+  return process.env.NEXT_PUBLIC_OMNITOOL_API_URL?.replace(/\/$/, "") || "";
+}
+
 export function createOmniPowerSyncConnector(): PowerSyncBackendConnector {
+  const apiBase = getApiBase();
+
   return {
     async fetchCredentials() {
-      const res = await fetch("/api/sync/token", { credentials: "include" });
-      if (!res.ok) return null;
+      const res = await fetch(`${apiBase}/api/sync/token`, { credentials: "include" });
+      if (res.status === 401 || res.status === 403) return null;
+      if (!res.ok) throw new Error(`Sync token fetch failed: ${res.status}`);
       const data = (await res.json()) as {
         syncUrl?: string | null;
         powersyncToken?: string | null;
@@ -36,7 +48,7 @@ export function createOmniPowerSyncConnector(): PowerSyncBackendConnector {
         };
       });
 
-      const res = await fetch("/api/sync/upload", {
+      const res = await fetch(`${apiBase}/api/sync/upload`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

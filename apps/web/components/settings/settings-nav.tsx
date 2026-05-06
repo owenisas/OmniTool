@@ -19,6 +19,7 @@ import {
   Plug,
   Info,
   Terminal,
+  StickyNote,
 } from "lucide-react";
 
 const GROUPS = [
@@ -38,6 +39,7 @@ const GROUPS = [
     links: [
       { href: "/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/settings/appearance", label: "Appearance", icon: Palette },
+      { href: "/settings/notes", label: "Notes", icon: StickyNote },
     ],
   },
   {

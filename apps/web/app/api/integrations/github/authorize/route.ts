@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { oauthLimiter } from "@/lib/rate-limit";
 import { providerRegistry } from "@omnitool/integrations";
 import crypto from "crypto";
+import { signDesktopOAuthState, isDesktopServer } from "@/lib/oauth-state";
 
 export async function GET(request: Request) {
   // Rate limit OAuth initiation
@@ -42,9 +43,14 @@ export async function GET(request: Request) {
     );
   }
 
-  // Use a simple random state + store in cookie for CSRF protection
-  const state = crypto.randomBytes(16).toString("hex");
   const redirectUri = `${process.env.AUTH_URL}/api/integrations/github/callback`;
+
+  // Desktop: sign state with userId (callback comes from system browser, no cookies).
+  // Web: random state + cookie for CSRF protection.
+  const isDesktop = isDesktopServer();
+  const state = isDesktop
+    ? signDesktopOAuthState(session.user.id)
+    : crypto.randomBytes(16).toString("hex");
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -54,6 +60,16 @@ export async function GET(request: Request) {
   });
 
   const authUrl = `${github.authUrl}?${params.toString()}`;
+
+  // Desktop: return HTML with JS redirect so Tauri's on_navigation handler
+  // intercepts the external URL and opens it in the system browser.
+  // HTTP 302 redirects are followed internally by WKWebView without triggering on_navigation.
+  if (isDesktop) {
+    return new NextResponse(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body><script>window.location.href=${JSON.stringify(authUrl)};</script></body></html>`,
+      { status: 200, headers: { "Content-Type": "text/html" } }
+    );
+  }
 
   const response = NextResponse.redirect(authUrl);
   response.cookies.set("github-oauth-state", state, {

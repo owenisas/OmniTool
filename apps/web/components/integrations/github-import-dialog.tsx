@@ -16,24 +16,23 @@ import {
 import { Button } from "@omnitool/ui/components/button";
 import { Badge } from "@omnitool/ui/components/badge";
 import { Separator } from "@omnitool/ui/components/separator";
-import { Card, CardContent } from "@omnitool/ui/components/card";
 import {
   Loader2,
   ArrowLeft,
   Lock,
-  CheckCircle2,
   Users,
   FolderGit2,
   Building2,
   AlertCircle,
 } from "lucide-react";
+import { runBackgroundTask } from "@/lib/background-tasks/run";
 
 interface GitHubImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2;
 
 export function GitHubImportDialog({
   open,
@@ -49,7 +48,6 @@ export function GitHubImportDialog({
     new Set()
   );
   const [importMembers, setImportMembers] = useState(true);
-  const [importTriggered, setImportTriggered] = useState(false);
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -59,9 +57,10 @@ export function GitHubImportDialog({
       setIsPersonal(false);
       setSelectedRepoIds(new Set());
       setImportMembers(true);
-      setImportTriggered(false);
     }
   }, [open]);
+
+  const utils = trpc.useUtils();
 
   // -- Step 1: List orgs --
   const orgsQuery = trpc.integration.github.listOrgs.useQuery(undefined, {
@@ -84,20 +83,8 @@ export function GitHubImportDialog({
     }
   }, [previewQuery.data]);
 
-  // -- Step 3: Execute import --
+  // -- Background import --
   const importMutation = trpc.integration.github.executeImport.useMutation();
-
-  useEffect(() => {
-    if (step === 3 && selectedOrg && !importTriggered) {
-      setImportTriggered(true);
-      importMutation.mutate({
-        orgLogin: selectedOrg,
-        selectedRepoIds: Array.from(selectedRepoIds),
-        importMembers: isPersonal ? false : importMembers,
-        isPersonal,
-      });
-    }
-  }, [step, selectedOrg, importTriggered, selectedRepoIds, importMembers, importMutation]);
 
   // -- Handlers --
   const handleSelectOrg = useCallback((login: string, personal: boolean) => {
@@ -142,17 +129,53 @@ export function GitHubImportDialog({
     setSelectedRepoIds(new Set());
   }, []);
 
+  /**
+   * Queue the import as a background task and close the dialog. Toast
+   * "View" calls onViewResult to switch the active team + jump to /projects.
+   */
   const handleStartImport = useCallback(() => {
-    setStep(3);
-  }, []);
-
-  const handleGoToTeam = useCallback(() => {
-    if (importMutation.data) {
-      switchTeam(importMutation.data.teamId);
-      onOpenChange(false);
-      router.push("/projects");
-    }
-  }, [importMutation.data, switchTeam, onOpenChange, router]);
+    if (!selectedOrg) return;
+    const orgLogin = selectedOrg;
+    void runBackgroundTask({
+      id: `github-import-${Date.now()}`,
+      kind: "github-import",
+      label: `Importing ${orgLogin} from GitHub`,
+      successToast: (r: {
+        teamName: string;
+        teamId: string;
+        projectsCreated: number;
+        membersImported: number;
+        membersSkipped: number;
+      }) =>
+        `Imported ${r.teamName} — ${r.projectsCreated} projects, ${r.membersImported} members`,
+      onViewResult: (r) => {
+        switchTeam(r.teamId);
+        router.push("/projects");
+      },
+      work: () =>
+        importMutation.mutateAsync({
+          orgLogin,
+          selectedRepoIds: Array.from(selectedRepoIds),
+          importMembers: isPersonal ? false : importMembers,
+          isPersonal,
+        }),
+      onSuccess: () => {
+        void utils.team.list.invalidate?.();
+        void utils.integration.github.listOrgs.invalidate();
+      },
+    });
+    onOpenChange(false);
+  }, [
+    selectedOrg,
+    selectedRepoIds,
+    importMembers,
+    isPersonal,
+    importMutation,
+    switchTeam,
+    router,
+    utils,
+    onOpenChange,
+  ]);
 
   // -- Summary counts for step 2 --
   const newRepoCount = selectedRepoIds.size;
@@ -434,122 +457,10 @@ export function GitHubImportDialog({
                   onClick={handleStartImport}
                   disabled={newRepoCount === 0 && !importMembers}
                 >
-                  Import
+                  Import in background
                 </Button>
               </DialogFooter>
             )}
-          </>
-        )}
-
-        {/* Step 3: Results */}
-        {step === 3 && (
-          <>
-            <DialogHeader>
-              <DialogTitle>
-                {importMutation.isPending
-                  ? "Importing..."
-                  : importMutation.isError
-                    ? "Import Failed"
-                    : "Import Complete"}
-              </DialogTitle>
-              <DialogDescription>
-                {importMutation.isPending
-                  ? "Please wait while we import your data from GitHub."
-                  : importMutation.isError
-                    ? "Something went wrong during the import."
-                    : "Your GitHub organization has been imported successfully."}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex-1 flex items-center justify-center py-6">
-              {importMutation.isPending && (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">
-                    Importing repositories and members...
-                  </p>
-                </div>
-              )}
-
-              {importMutation.isError && (
-                <div className="flex flex-col items-center gap-3 text-destructive">
-                  <AlertCircle className="h-10 w-10" />
-                  <p className="text-sm">
-                    {importMutation.error.message ||
-                      "An unexpected error occurred."}
-                  </p>
-                </div>
-              )}
-
-              {importMutation.isSuccess && importMutation.data && (
-                <Card className="w-full">
-                  <CardContent className="p-6 space-y-4">
-                    <div className="flex items-center gap-3">
-                      <CheckCircle2 className="h-8 w-8 text-green-500 flex-shrink-0" />
-                      <div>
-                        <h3 className="font-semibold text-lg">
-                          {importMutation.data.teamName}
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          Team created successfully
-                        </p>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    <div className="grid grid-cols-3 gap-4 text-center">
-                      <div>
-                        <p className="text-2xl font-bold">
-                          {importMutation.data.projectsCreated}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Projects Created
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-2xl font-bold">
-                          {importMutation.data.membersImported}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Members Imported
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-2xl font-bold">
-                          {importMutation.data.membersSkipped}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Members Skipped
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-
-            <DialogFooter>
-              {importMutation.isSuccess && (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => onOpenChange(false)}
-                  >
-                    Close
-                  </Button>
-                  <Button onClick={handleGoToTeam}>Go to Team</Button>
-                </>
-              )}
-              {importMutation.isError && (
-                <Button
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                >
-                  Close
-                </Button>
-              )}
-            </DialogFooter>
           </>
         )}
       </DialogContent>

@@ -11,6 +11,10 @@ import { integrationRouter } from "./integration";
 import { dashboardRouter } from "./dashboard";
 import { aiConversationRouter } from "./ai-conversation";
 import { teamActivityRouter } from "./team-activity";
+import { userNotePreferenceRouter } from "./user-note-preference";
+import { activityRouter } from "./activity";
+import { entityLinkRouter } from "./entity-link";
+import { handoffRouter } from "./handoff";
 
 export const appRouter = createTRPCRouter({
   user: userRouter,
@@ -25,6 +29,10 @@ export const appRouter = createTRPCRouter({
   dashboard: dashboardRouter,
   aiConversation: aiConversationRouter,
   teamActivity: teamActivityRouter,
+  userNotePreference: userNotePreferenceRouter,
+  activity: activityRouter,
+  entityLink: entityLinkRouter,
+  handoff: handoffRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/trpc/client";
 import { Card, CardContent } from "@omnitool/ui/components/card";
 import { Button } from "@omnitool/ui/components/button";
@@ -13,9 +13,15 @@ import {
   SlackIcon,
   LinearIcon,
 } from "@/components/icons/brand-icons";
-import { startOAuthFlow, openInBrowser } from "@/lib/tauri";
+import {
+  startOAuthFlow,
+  getCurrentDeepLinks,
+  onDeepLink,
+  isTauri,
+} from "@/lib/tauri";
 import { GitHubImportDialog } from "@/components/integrations/github-import-dialog";
 import { NotionImportDialog } from "@/components/integrations/notion-import-dialog";
+import { runBackgroundTask } from "@/lib/background-tasks/run";
 
 interface IntegrationDef {
   key: string;
@@ -62,11 +68,15 @@ const integrations: IntegrationDef[] = [
 ];
 
 export default function IntegrationsPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const connectedParam = searchParams.get("connected");
+  const connectParam = searchParams.get("connect");
 
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [notionImportDialogOpen, setNotionImportDialogOpen] = useState(false);
+  const startedOAuthRef = useRef<string | null>(null);
+  const openedImportRef = useRef<string | null>(null);
 
   const connectedQuery = trpc.integration.listConnected.useQuery();
   const disconnectMutation = trpc.integration.disconnect.useMutation({
@@ -74,6 +84,37 @@ export default function IntegrationsPage() {
       connectedQuery.refetch();
     },
   });
+  const utils = trpc.useUtils();
+  const recleanMutation = trpc.integration.notion.recleanImported.useMutation();
+
+  /**
+   * Re-process every previously imported Notion note through the latest
+   * markdown→blocks converter. Strips legacy `<details>`/`<summary>` HTML
+   * left over from imports that pre-date the toggle-stripping fix, adds
+   * native table/image blocks, and refreshes inter-page links.
+   */
+  function handleRecleanNotionNotes() {
+    void runBackgroundTask({
+      id: `notion-reclean-${Date.now()}`,
+      kind: "notion-reclean",
+      label: "Re-cleaning imported Notion notes",
+      href: "/notes",
+      successToast: (r: {
+        cleaned: number;
+        skipped: number;
+        failed: number;
+        total: number;
+      }) =>
+        `Cleaned ${r.cleaned} of ${r.total} Notion notes` +
+        (r.failed > 0 ? ` · ${r.failed} failed` : "") +
+        (r.skipped > 0 ? ` · ${r.skipped} skipped (no markdown)` : ""),
+      work: () => recleanMutation.mutateAsync(),
+      onSuccess: () => {
+        void utils.note.list.invalidate();
+        void utils.note.getById.invalidate();
+      },
+    });
+  }
 
   // Refetch when window regains focus — picks up OAuth completions
   // that happened in the system browser (desktop app flow).
@@ -85,6 +126,55 @@ export default function IntegrationsPage() {
     window.addEventListener("focus", refetchOnFocus);
     return () => window.removeEventListener("focus", refetchOnFocus);
   }, [refetchOnFocus]);
+
+  // Listen for deep link events (desktop: omnitool://oauth-complete?provider=xxx)
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    const handleOAuthComplete = (urls: string[]) => {
+      for (const rawUrl of urls) {
+        let url: URL;
+        try {
+          url = new URL(rawUrl);
+        } catch {
+          continue;
+        }
+
+        if (
+          url.protocol !== "omnitool:" ||
+          url.hostname !== "oauth-complete"
+        ) {
+          continue;
+        }
+
+        const provider = url.searchParams.get("provider");
+        const status = url.searchParams.get("status");
+        if (provider !== "github" && provider !== "notion") continue;
+
+        connectedQuery.refetch();
+
+        if (status === "success") {
+          router.replace(`/settings/integrations?connected=${provider}`);
+          if (provider === "github") {
+            setImportDialogOpen(true);
+          } else {
+            setNotionImportDialogOpen(true);
+          }
+        } else {
+          router.replace(`/settings/integrations?error=${provider}_oauth`);
+        }
+      }
+    };
+
+    let cleanup: (() => void) | null = null;
+    getCurrentDeepLinks().then(handleOAuthComplete);
+    onDeepLink(handleOAuthComplete).then((unlisten) => {
+      cleanup = unlisten;
+    });
+    return () => {
+      cleanup?.();
+    };
+  }, [connectedQuery, router]);
 
   const connectedMap = useMemo(() => {
     const map = new Map<
@@ -103,6 +193,52 @@ export default function IntegrationsPage() {
     }
     return map;
   }, [connectedQuery.data]);
+
+  useEffect(() => {
+    if (connectedParam === "github" && openedImportRef.current !== "github") {
+      openedImportRef.current = "github";
+      setImportDialogOpen(true);
+    }
+
+    if (connectedParam === "notion" && openedImportRef.current !== "notion") {
+      openedImportRef.current = "notion";
+      setNotionImportDialogOpen(true);
+    }
+  }, [connectedParam]);
+
+  useEffect(() => {
+    if (connectParam !== "github" && connectParam !== "notion") return;
+    if (connectedQuery.isLoading || connectedQuery.isFetching) return;
+
+    const provider = connectParam === "github" ? "GITHUB" : "NOTION";
+    const isConnected = connectedMap.has(provider);
+
+    if (isConnected) {
+      if (openedImportRef.current !== connectParam) {
+        openedImportRef.current = connectParam;
+        if (connectParam === "github") {
+          setImportDialogOpen(true);
+        } else {
+          setNotionImportDialogOpen(true);
+        }
+      }
+      return;
+    }
+
+    if (startedOAuthRef.current === connectParam) return;
+    startedOAuthRef.current = connectParam;
+
+    startOAuthFlow(
+      connectParam === "github"
+        ? "/api/integrations/github/authorize"
+        : "/api/integrations/notion/authorize",
+    );
+  }, [
+    connectParam,
+    connectedMap,
+    connectedQuery.isFetching,
+    connectedQuery.isLoading,
+  ]);
 
   function parseMetadataName(metadata: string | null): string | null {
     if (!metadata) return null;
@@ -139,9 +275,7 @@ export default function IntegrationsPage() {
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold">{integration.name}</h3>
-                {connected && (
-                  <Badge variant="secondary">Connected</Badge>
-                )}
+                {connected && <Badge variant="secondary">Connected</Badge>}
                 {!integration.available && (
                   <Badge variant="outline">Coming soon</Badge>
                 )}
@@ -203,6 +337,15 @@ export default function IntegrationsPage() {
                     Import from Notion
                   </Button>
                   <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleRecleanNotionNotes}
+                    disabled={recleanMutation.isPending}
+                    title="Re-process previously imported notes through the latest formatter (strips legacy HTML toggles, fixes tables, etc.)"
+                  >
+                    Re-clean imports
+                  </Button>
+                  <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleDisconnect("NOTION")}
@@ -217,9 +360,7 @@ export default function IntegrationsPage() {
                 <Button
                   size="sm"
                   onClick={() =>
-                    openInBrowser(
-                      `${window.location.origin}/api/integrations/notion/authorize`
-                    )
+                    startOAuthFlow("/api/integrations/notion/authorize")
                   }
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />

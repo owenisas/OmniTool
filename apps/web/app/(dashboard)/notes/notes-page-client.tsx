@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useRouter, usePathname } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "@/trpc/client";
 import { getEmptyNoteBlocks } from "@/lib/note-blocks";
 import type { AppRouter } from "@/trpc/routers/_app";
-import { Badge } from "@omnitool/ui/components/badge";
 import { Button } from "@omnitool/ui/components/button";
 import {
   Dialog,
@@ -16,94 +15,382 @@ import {
   DialogTitle,
 } from "@omnitool/ui/components/dialog";
 import { Input } from "@omnitool/ui/components/input";
-import { Label } from "@omnitool/ui/components/label";
-import { FilePlus2, Loader2, Pin } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@omnitool/ui/components/popover";
+import {
+  BookOpen,
+  ChevronRight,
+  Clock,
+  FilePlus2,
+  FolderTree,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Sparkles,
+  Trash,
+  Trash2,
+} from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
+import { TodayWidget } from "@/components/notes/today-widget";
+import { TeamDailySection } from "@/components/notes/team-daily-section";
+import { TopbarSlot } from "@/components/layout/topbar-slot";
+import { MoveNoteDialog } from "@/components/notes/move-note-dialog";
+import { NotesViewControls } from "@/components/notes/notes-view-controls";
+import { NotesCardsView } from "@/components/notes/views/notes-cards-view";
+import { NotesListView } from "@/components/notes/views/notes-list-view";
+import { NotesGalleryView } from "@/components/notes/views/notes-gallery-view";
+import {
+  groupByParent,
+  groupNotes,
+  persistExpanded,
+  readExpanded,
+  sortNotes,
+} from "@/lib/notes/tree";
+import {
+  DEFAULT_VIEW_PREFS,
+  persistViewPrefs,
+  readViewPrefs,
+  type GroupBy,
+  type SortBy,
+  type ViewMode,
+  type ViewPrefs,
+} from "@/lib/notes/view-prefs";
+import { cn } from "@/lib/utils";
 
 type ListNote = inferRouterOutputs<AppRouter>["note"]["list"][number];
 
-function groupByParent(notes: ListNote[]) {
-  const m = new Map<string | null, ListNote[]>();
-  for (const n of notes) {
-    const p = n.parentId ?? null;
-    if (!m.has(p)) m.set(p, []);
-    m.get(p)!.push(n);
-  }
-  for (const arr of m.values()) {
-    arr.sort(
-      (a, b) =>
-        a.position - b.position ||
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-    );
-  }
-  return m;
+interface NoteRowMenuProps {
+  note: ListNote;
+  onRequestRename: () => void;
+  onRequestDelete: () => void;
+  onRequestMove: () => void;
+}
+
+function NoteRowMenu({
+  note,
+  onRequestRename,
+  onRequestDelete,
+  onRequestMove,
+}: NoteRowMenuProps) {
+  const [open, setOpen] = useState(false);
+  const utils = trpc.useUtils();
+  const togglePin = trpc.note.update.useMutation({
+    onSuccess: () => {
+      void utils.note.list.invalidate();
+    },
+  });
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-8 w-8 shrink-0 text-muted-foreground"
+          title="More actions"
+          aria-label="Note actions"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-44 p-1" align="end">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted"
+          onClick={() => {
+            setOpen(false);
+            onRequestRename();
+          }}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Rename
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted"
+          disabled={togglePin.isPending}
+          onClick={() => {
+            togglePin.mutate(
+              { id: note.id, isPinned: !note.isPinned },
+              { onSettled: () => setOpen(false) },
+            );
+          }}
+        >
+          {note.isPinned ? (
+            <>
+              <PinOff className="h-3.5 w-3.5" />
+              Unpin
+            </>
+          ) : (
+            <>
+              <Pin className="h-3.5 w-3.5" />
+              Pin
+            </>
+          )}
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted"
+          onClick={() => {
+            setOpen(false);
+            onRequestMove();
+          }}
+        >
+          <FolderTree className="h-3.5 w-3.5" />
+          Move to…
+        </button>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10"
+          onClick={() => {
+            setOpen(false);
+            onRequestDelete();
+          }}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+interface NoteTreeRowsProps {
+  grouped: Map<string | null, ListNote[]>;
+  parentId: string | null;
+  depth: number;
+  editingId: string | null;
+  setEditingId: (id: string | null) => void;
+  expanded: Set<string>;
+  toggle: (id: string) => void;
+  onSubnote: (parentId: string) => void;
+  onDelete: (note: ListNote) => void;
+  onMove: (note: ListNote) => void;
+  creatingChildOf: string | null;
 }
 
 function NoteTreeRows({
   grouped,
   parentId,
   depth,
+  editingId,
+  setEditingId,
+  expanded,
+  toggle,
   onSubnote,
-}: {
-  grouped: Map<string | null, ListNote[]>;
-  parentId: string | null;
-  depth: number;
-  onSubnote: (parentId: string) => void;
-}) {
+  onDelete,
+  onMove,
+  creatingChildOf,
+}: NoteTreeRowsProps) {
   const rows = grouped.get(parentId) ?? [];
   return (
     <ul className="space-y-0.5">
-      {rows.map((note) => (
-        <li key={note.id}>
-          <div
-            className="flex items-stretch gap-0.5 rounded-md hover:bg-muted/50"
-            style={{ paddingLeft: depth * 12 }}
-          >
-            <Link
-              href={`/notes/${note.id}`}
-              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent/60"
-            >
-              {note.isPinned ? (
-                <Pin className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
-              ) : (
-                <span className="inline-block w-3.5 shrink-0" />
-              )}
-              <span className="truncate font-medium">{note.title || "Untitled"}</span>
-            </Link>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="h-8 w-8 shrink-0 text-muted-foreground"
-              title="New subpage"
-              onClick={() => onSubnote(note.id)}
-            >
-              <FilePlus2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-          <NoteTreeRows
-            grouped={grouped}
-            parentId={note.id}
-            depth={depth + 1}
-            onSubnote={onSubnote}
-          />
-        </li>
-      ))}
+      {rows.map((note) => {
+        const hasChildren = (grouped.get(note.id) ?? []).length > 0;
+        const isExpanded = expanded.has(note.id);
+        return (
+          <li key={note.id}>
+            <NoteRow
+              note={note}
+              depth={depth}
+              isEditing={editingId === note.id}
+              hasChildren={hasChildren}
+              isExpanded={isExpanded}
+              onToggleExpand={() => toggle(note.id)}
+              onStartEdit={() => setEditingId(note.id)}
+              onCancelEdit={() => setEditingId(null)}
+              onSubnote={onSubnote}
+              onDelete={onDelete}
+              onMove={onMove}
+              isCreatingChild={creatingChildOf === note.id}
+            />
+            {isExpanded && hasChildren && (
+              <NoteTreeRows
+                grouped={grouped}
+                parentId={note.id}
+                depth={depth + 1}
+                editingId={editingId}
+                setEditingId={setEditingId}
+                expanded={expanded}
+                toggle={toggle}
+                onSubnote={onSubnote}
+                onDelete={onDelete}
+                onMove={onMove}
+                creatingChildOf={creatingChildOf}
+              />
+            )}
+          </li>
+        );
+      })}
     </ul>
+  );
+}
+
+interface NoteRowProps {
+  note: ListNote;
+  depth: number;
+  isEditing: boolean;
+  hasChildren: boolean;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSubnote: (parentId: string) => void;
+  onDelete: (note: ListNote) => void;
+  onMove: (note: ListNote) => void;
+  isCreatingChild: boolean;
+}
+
+function NoteRow({
+  note,
+  depth,
+  isEditing,
+  hasChildren,
+  isExpanded,
+  onToggleExpand,
+  onStartEdit,
+  onCancelEdit,
+  onSubnote,
+  onDelete,
+  onMove,
+  isCreatingChild,
+}: NoteRowProps) {
+  const utils = trpc.useUtils();
+  const [draftTitle, setDraftTitle] = useState(note.title || "Untitled");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const renameMutation = trpc.note.update.useMutation({
+    onSuccess: () => {
+      void utils.note.list.invalidate();
+      void utils.note.getById.invalidate({ id: note.id });
+    },
+  });
+
+  function commitRename() {
+    const trimmed = draftTitle.trim();
+    if (!trimmed) {
+      onCancelEdit();
+      setDraftTitle(note.title || "Untitled");
+      return;
+    }
+    if (trimmed !== note.title) {
+      renameMutation.mutate({ id: note.id, title: trimmed });
+    }
+    onCancelEdit();
+  }
+
+  return (
+    <div
+      className="group/treerow flex items-stretch gap-0.5 rounded-md hover:bg-muted/50"
+      style={{ paddingLeft: depth * 12 }}
+    >
+      <button
+        type="button"
+        aria-label={isExpanded ? "Collapse" : "Expand"}
+        onClick={onToggleExpand}
+        className={cn(
+          "flex h-8 w-5 shrink-0 items-center justify-center text-muted-foreground transition-transform",
+          !hasChildren && "invisible",
+          isExpanded && "rotate-90",
+        )}
+        tabIndex={hasChildren ? 0 : -1}
+      >
+        <ChevronRight className="h-3 w-3" />
+      </button>
+
+      {isEditing ? (
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1">
+          {note.isPinned ? (
+            <Pin className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+          ) : (
+            <span className="inline-block w-3.5 shrink-0" />
+          )}
+          <Input
+            ref={inputRef}
+            autoFocus
+            value={draftTitle}
+            onChange={(e) => setDraftTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRename();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setDraftTitle(note.title || "Untitled");
+                onCancelEdit();
+              }
+            }}
+            onBlur={commitRename}
+            className="h-7 px-2 text-sm"
+          />
+        </div>
+      ) : (
+        <Link
+          href={`/notes/${note.id}`}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent/60"
+        >
+          {note.isPinned ? (
+            <Pin className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+          ) : (
+            <span className="inline-block w-3.5 shrink-0" />
+          )}
+          {note.emoji ? (
+            <span className="shrink-0 text-sm leading-none" aria-hidden>
+              {note.emoji}
+            </span>
+          ) : null}
+          <span className="truncate font-medium">{note.title || "Untitled"}</span>
+        </Link>
+      )}
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        className="h-8 w-8 shrink-0 text-muted-foreground"
+        title="New subpage"
+        aria-label="New subpage"
+        disabled={isCreatingChild}
+        onClick={() => onSubnote(note.id)}
+      >
+        {isCreatingChild ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <FilePlus2 className="h-3.5 w-3.5" />
+        )}
+      </Button>
+      <NoteRowMenu
+        note={note}
+        onRequestRename={() => {
+          setDraftTitle(note.title || "Untitled");
+          onStartEdit();
+        }}
+        onRequestDelete={() => onDelete(note)}
+        onRequestMove={() => onMove(note)}
+      />
+    </div>
   );
 }
 
 export function NotesPageClient() {
   const router = useRouter();
+  const pathname = usePathname();
   const [searchInput, setSearchInput] = useState("");
   const [tagInput, setTagInput] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
   const [appliedTag, setAppliedTag] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createParentId, setCreateParentId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [tagsField, setTagsField] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ListNote | null>(null);
+  const [pendingMove, setPendingMove] = useState<ListNote | null>(null);
+  const [creatingChildOf, setCreatingChildOf] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
 
   const utils = trpc.useUtils();
   const { data: notes, isLoading } = trpc.note.list.useQuery({
@@ -111,16 +398,147 @@ export function NotesPageClient() {
     tag: appliedTag || undefined,
   });
 
-  const grouped = useMemo(() => (notes ? groupByParent(notes) : new Map()), [notes]);
+  // Server source of truth for view preferences. localStorage paints first
+  // (synchronous read on mount); this query reconciles to the server value.
+  const { data: serverPref } = trpc.userNotePreference.get.useQuery();
+  const updatePref = trpc.userNotePreference.update.useMutation({
+    onSuccess: () => {
+      void utils.userNotePreference.get.invalidate();
+    },
+  });
+
+  // Hydrate expanded state + view prefs from localStorage on mount.
+  useEffect(() => {
+    setExpanded(readExpanded());
+    setViewPrefs(readViewPrefs());
+  }, []);
+
+  // Reconcile localStorage-cached view prefs with the server value (multi-device sync).
+  useEffect(() => {
+    if (!serverPref) return;
+    const next: ViewPrefs = {
+      viewMode: (serverPref.viewMode as ViewMode) ?? DEFAULT_VIEW_PREFS.viewMode,
+      sortBy: (serverPref.sortBy as SortBy) ?? DEFAULT_VIEW_PREFS.sortBy,
+      groupBy: (serverPref.groupBy as GroupBy) ?? DEFAULT_VIEW_PREFS.groupBy,
+    };
+    setViewPrefs((prev) =>
+      prev.viewMode === next.viewMode &&
+      prev.sortBy === next.sortBy &&
+      prev.groupBy === next.groupBy
+        ? prev
+        : next,
+    );
+    persistViewPrefs(next);
+  }, [serverPref]);
+
+  function applyViewPrefs(patch: Partial<ViewPrefs>) {
+    setViewPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      persistViewPrefs(next);
+      updatePref.mutate(patch);
+      return next;
+    });
+  }
+
+  function toggleExpanded(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      persistExpanded(next);
+      return next;
+    });
+  }
+
+  // Auto-expand ancestors of the active note id when arriving via /notes/[id]
+  // (the page client is also reachable from cached navigation).
+  const activeId =
+    pathname.startsWith("/notes/") && pathname.split("/")[2]
+      ? pathname.split("/")[2]
+      : null;
+
+  useEffect(() => {
+    if (!activeId || !notes) return;
+    const byId = new Map<string, { parentId: string | null }>();
+    for (const n of notes) byId.set(n.id, { parentId: n.parentId ?? null });
+    const toExpand: string[] = [];
+    let cur = byId.get(activeId)?.parentId ?? null;
+    let safety = 0;
+    while (cur && safety < 50) {
+      toExpand.push(cur);
+      cur = byId.get(cur)?.parentId ?? null;
+      safety += 1;
+    }
+    if (toExpand.length === 0) return;
+    setExpanded((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const id of toExpand) {
+        if (!next.has(id)) {
+          next.add(id);
+          changed = true;
+        }
+      }
+      if (changed) persistExpanded(next);
+      return changed ? next : prev;
+    });
+  }, [activeId, notes]);
+
+  const grouped = useMemo(
+    () => (notes ? groupByParent(notes) : new Map()),
+    [notes],
+  );
+
+  const recentNotes = useMemo<ListNote[]>(() => {
+    if (!notes) return [];
+    return [...notes]
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      )
+      .slice(0, 5);
+  }, [notes]);
+
+  // Sorted + grouped main-pane notes for the selected view mode.
+  const mainNoteGroups = useMemo(() => {
+    if (!notes) return [];
+    const sorted = sortNotes(notes, viewPrefs.sortBy);
+    const projectNames = new Map<string, string>();
+    for (const n of notes) {
+      if (n.linkedProject) {
+        projectNames.set(n.linkedProject.id, n.linkedProject.name);
+      }
+    }
+    return groupNotes(sorted, viewPrefs.groupBy, projectNames);
+  }, [notes, viewPrefs.sortBy, viewPrefs.groupBy]);
 
   const createNote = trpc.note.create.useMutation({
-    onSuccess: (row) => {
+    onSuccess: (row, vars) => {
       void utils.note.list.invalidate();
-      setCreateOpen(false);
-      setTitle("");
-      setTagsField("");
-      setCreateParentId(null);
+      const parentId = vars?.parentId ?? null;
+      if (parentId) {
+        setExpanded((prev) => {
+          const next = new Set(prev);
+          next.add(parentId);
+          persistExpanded(next);
+          return next;
+        });
+      }
       router.push(`/notes/${row.id}`);
+    },
+    onSettled: () => setCreatingChildOf(null),
+  });
+
+  const deleteNote = trpc.note.delete.useMutation({
+    onSuccess: () => {
+      void utils.note.list.invalidate();
+      setPendingDelete(null);
+    },
+  });
+
+  const backfillAutoNotes = trpc.note.backfillAutoNotes.useMutation({
+    onSuccess: () => {
+      void utils.note.list.invalidate();
     },
   });
 
@@ -130,47 +548,46 @@ export function NotesPageClient() {
     setAppliedTag(tagInput.trim());
   }
 
-  function openNewNote(parentId: string | null = null) {
-    setCreateParentId(parentId);
-    setCreateOpen(true);
-  }
-
-  function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    const tags = tagsField
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    const trimmedTitle = title.trim();
+  function quickCreateUntitled() {
+    if (createNote.isPending) return;
+    setCreatingChildOf("__root__");
     createNote.mutate({
-      title: trimmedTitle || "Untitled",
+      title: "Untitled",
       blocks: getEmptyNoteBlocks(),
       contentText: "",
-      ...(createParentId ? { parentId: createParentId } : {}),
-      ...(tags.length > 0 ? { tags } : {}),
     });
   }
 
+  function quickCreateSubnote(parentId: string) {
+    if (createNote.isPending) return;
+    setCreatingChildOf(parentId);
+    createNote.mutate({
+      title: "Untitled",
+      blocks: getEmptyNoteBlocks(),
+      contentText: "",
+      parentId,
+    });
+  }
+
+  const isFiltering = Boolean(appliedSearch || appliedTag);
+  const showEmptyState =
+    !isLoading && notes && notes.length === 0 && !isFiltering;
+
   return (
     <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+      <TopbarSlot target="actions">
+        <Button
+          size="sm"
+          onClick={quickCreateUntitled}
+          disabled={createNote.isPending}
+        >
+          <FilePlus2 className="mr-1 h-4 w-4" />
+          {createNote.isPending ? "Creating…" : "New note"}
+        </Button>
+      </TopbarSlot>
+
       <aside className="w-full shrink-0 space-y-4 lg:w-72">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">Pages</h2>
-          <Button
-            size="sm"
-            onClick={() => {
-              createNote.mutate({
-                title: "Untitled",
-                blocks: getEmptyNoteBlocks(),
-                contentText: "",
-              });
-            }}
-            disabled={createNote.isPending}
-          >
-            <FilePlus2 className="mr-1 h-4 w-4" />
-            {createNote.isPending ? "Creating..." : "New note"}
-          </Button>
-        </div>
+        <h2 className="text-sm font-semibold text-muted-foreground">Pages</h2>
 
         <form onSubmit={applyFilters} className="flex flex-col gap-2">
           <Input
@@ -197,7 +614,44 @@ export function NotesPageClient() {
           </div>
         )}
 
-        {!isLoading && notes && notes.length === 0 && (
+        {!isLoading && <TodayWidget />}
+
+        {!isLoading && recentNotes.length > 0 && (
+          <section className="space-y-1.5">
+            <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <Clock className="h-3 w-3" />
+              Recent
+            </h3>
+            <ul className="space-y-0.5">
+              {recentNotes.map((note) => (
+                <li key={`recent-${note.id}`}>
+                  <Link
+                    href={`/notes/${note.id}`}
+                    className="block rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                  >
+                    <span className="truncate">
+                      {note.title || "Untitled"}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {!isLoading && <TeamDailySection />}
+
+        {!isLoading && (
+          <Link
+            href="/notes/trash"
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          >
+            <Trash className="h-3 w-3" />
+            <span>Trash</span>
+          </Link>
+        )}
+
+        {!isLoading && notes && notes.length === 0 && isFiltering && (
           <p className="text-sm text-muted-foreground">
             No notes match. Try widening your search or create a new page.
           </p>
@@ -209,102 +663,151 @@ export function NotesPageClient() {
               grouped={grouped}
               parentId={null}
               depth={0}
-              onSubnote={(id) => openNewNote(id)}
+              editingId={editingId}
+              setEditingId={setEditingId}
+              expanded={expanded}
+              toggle={toggleExpanded}
+              onSubnote={quickCreateSubnote}
+              onDelete={(n) => setPendingDelete(n)}
+              onMove={(n) => setPendingMove(n)}
+              creatingChildOf={creatingChildOf}
             />
           </nav>
         )}
       </aside>
 
-      <section className="min-w-0 flex-1 space-y-4">
-        <p className="text-sm text-muted-foreground">
-          Open a page from the list to edit with the block editor (slash commands, drag handles,
-          autosave). Previews below use searchable plain text.
-        </p>
-
-        {!isLoading && notes && notes.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {notes.map((note) => (
-              <Link
-                key={note.id}
-                href={`/notes/${note.id}`}
-                className="rounded-lg border bg-card p-4 shadow-sm transition-colors hover:bg-accent/30"
+      <section className="min-w-0 flex-1 space-y-6">
+        {showEmptyState ? (
+          <div className="flex min-h-[60vh] flex-col items-center justify-center rounded-lg border bg-card p-8 text-center">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <BookOpen className="h-7 w-7" />
+            </div>
+            <h3 className="mb-1 text-lg font-semibold">No notes yet</h3>
+            <p className="mb-6 max-w-sm text-sm text-muted-foreground">
+              Capture ideas with a block editor that supports slash commands,
+              drag handles, autosave, and an inline AI assistant. Embed live
+              tasks, project cards, and team daily summaries with{" "}
+              <kbd className="rounded border px-1 text-[11px]">/</kbd>.
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button
+                type="button"
+                onClick={quickCreateUntitled}
+                disabled={createNote.isPending}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-semibold leading-snug">
-                    {note.isPinned && (
-                      <span className="mr-1 inline-flex items-center gap-0.5 text-amber-600">
-                        <Pin className="inline h-3.5 w-3.5" />
-                      </span>
-                    )}
-                    {note.title || "Untitled"}
-                  </h3>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatDistanceToNow(new Date(note.updatedAt), {
-                      addSuffix: true,
-                    })}
-                  </span>
-                </div>
-                {note.contentText ? (
-                  <p className="mt-2 line-clamp-4 text-sm text-muted-foreground whitespace-pre-wrap">
-                    {note.contentText}
-                  </p>
-                ) : (
-                  <p className="mt-2 text-sm italic text-muted-foreground">Empty page</p>
-                )}
-                {note.tags.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    {note.tags.map((tag) => (
-                      <Badge key={tag.id} variant="outline" className="text-[10px]">
-                        {tag.name}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </Link>
-            ))}
+                <FilePlus2 className="mr-1 h-4 w-4" />
+                Create your first note
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => backfillAutoNotes.mutate()}
+                disabled={backfillAutoNotes.isPending}
+                title="Create a linked note for each existing project"
+              >
+                <Sparkles className="mr-1 h-4 w-4" />
+                {backfillAutoNotes.isPending
+                  ? "Generating…"
+                  : backfillAutoNotes.data
+                    ? `Generated ${backfillAutoNotes.data.created}`
+                    : "Generate notes for projects"}
+              </Button>
+            </div>
           </div>
+        ) : (
+          <>
+            <NotesViewControls
+              viewMode={viewPrefs.viewMode}
+              sortBy={viewPrefs.sortBy}
+              groupBy={viewPrefs.groupBy}
+              onViewModeChange={(v) => applyViewPrefs({ viewMode: v })}
+              onSortByChange={(v) => applyViewPrefs({ sortBy: v })}
+              onGroupByChange={(v) => applyViewPrefs({ groupBy: v })}
+            />
+
+            {viewPrefs.viewMode === "tree" ? (
+              notes && notes.length > 0 ? (
+                <nav
+                  aria-label="All note pages"
+                  className="rounded-lg border bg-card p-2"
+                >
+                  <NoteTreeRows
+                    grouped={grouped}
+                    parentId={null}
+                    depth={0}
+                    editingId={editingId}
+                    setEditingId={setEditingId}
+                    expanded={expanded}
+                    toggle={toggleExpanded}
+                    onSubnote={quickCreateSubnote}
+                    onDelete={(n) => setPendingDelete(n)}
+                    onMove={(n) => setPendingMove(n)}
+                    creatingChildOf={creatingChildOf}
+                  />
+                </nav>
+              ) : null
+            ) : viewPrefs.viewMode === "list" ? (
+              <NotesListView groups={mainNoteGroups} />
+            ) : viewPrefs.viewMode === "gallery" ? (
+              <NotesGalleryView groups={mainNoteGroups} />
+            ) : (
+              <NotesCardsView groups={mainNoteGroups} />
+            )}
+          </>
         )}
       </section>
 
-      <Dialog
-        open={createOpen}
+      {/* Move-to-parent dialog */}
+      <MoveNoteDialog
+        open={Boolean(pendingMove)}
         onOpenChange={(o) => {
-          setCreateOpen(o);
-          if (!o) setCreateParentId(null);
+          if (!o) setPendingMove(null);
+        }}
+        note={pendingMove}
+        allNotes={notes ?? []}
+      />
+
+      {/* Delete-confirmation dialog */}
+      <Dialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(o) => {
+          if (!o) setPendingDelete(null);
         }}
       >
-        <DialogContent className="sm:max-w-[520px]">
-          <form onSubmit={handleCreate}>
-            <DialogHeader>
-              <DialogTitle>{createParentId ? "New subpage" : "New note"}</DialogTitle>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="note-title">Title</Label>
-                <Input
-                  id="note-title"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Untitled"
-                  autoFocus
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="note-tags">Tags (comma-separated)</Label>
-                <Input
-                  id="note-tags"
-                  value={tagsField}
-                  onChange={(e) => setTagsField(e.target.value)}
-                  placeholder="idea, follow-up"
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button type="submit" disabled={createNote.isPending}>
-                {createNote.isPending ? "Creating…" : "Create & open"}
-              </Button>
-            </DialogFooter>
-          </form>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Delete note?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Move{" "}
+            <span className="font-medium text-foreground">
+              “{pendingDelete?.title || "Untitled"}”
+            </span>
+            {" "}to Trash? Subpages move along. You can restore from{" "}
+            <span className="font-medium">/notes/trash</span>.
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setPendingDelete(null)}
+              disabled={deleteNote.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                if (pendingDelete) {
+                  deleteNote.mutate({ id: pendingDelete.id });
+                }
+              }}
+              disabled={deleteNote.isPending}
+            >
+              {deleteNote.isPending ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

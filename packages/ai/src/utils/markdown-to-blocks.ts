@@ -1,15 +1,23 @@
-import { BlockNoteEditor } from "@blocknote/core";
+import { markdownToBlocksServer } from "./markdown-to-blocks-server";
 
 /**
  * Convert a markdown string to BlockNote block JSON.
- * Uses BlockNoteEditor.create() which works headlessly (no DOM) in v0.49+.
+ *
+ * Previously this called `BlockNoteEditor.create()` + `tryParseMarkdownToBlocks`,
+ * but BlockNote v0.49 still depends on a `document` global at create time
+ * (ProseMirror schema bootstrap), so it crashes in Node with
+ * "document is not defined" — both on AI tool calls (`appendToNote`,
+ * `createNote`) and the Notion importer running on Vercel.
+ *
+ * `markdownToBlocksServer` is a pure-Node converter covering the markdown
+ * shapes the AI and Notion produce in practice (headings, paragraphs,
+ * bullet/numbered lists, code blocks, links, basic emphasis). The function
+ * stays `async` for backwards-compat with existing callers.
  */
 export async function markdownToNoteBlocks(
   markdown: string
 ): Promise<unknown[]> {
-  const editor = BlockNoteEditor.create();
-  const blocks = await editor.tryParseMarkdownToBlocks(markdown);
-  return blocks as unknown[];
+  return markdownToBlocksServer(markdown) as unknown[];
 }
 
 /**

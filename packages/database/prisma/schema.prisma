@@ -32,6 +32,7 @@ model User {
   assignedIssues       Issue[]           @relation("IssueAssignee")
   reportedIssues       Issue[]           @relation("IssueReporter")
   notes                Note[]
+  noteVersions         NoteVersion[]
   timeEntries          TimeEntry[]
   aiConversations      AIConversation[]
   comments             Comment[]
@@ -39,6 +40,9 @@ model User {
   githubImports        GitHubImportLog[]
   dailyCodingSummaries DailyCodingSummary[]
   invitationsSent      TeamInvitation[]  @relation("InvitationsSent")
+  notePreference       UserNotePreference?
+  newsDigests          NewsDigest[]
+  agentHandoffs        AgentHandoff[]
 
   @@map("users")
 }
@@ -113,10 +117,14 @@ model Project {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  team    Team              @relation(fields: [teamId], references: [id])
-  tasks   Task[]
-  issues  Issue[]
-  metrics PerformanceMetric[]
+  team              Team                @relation(fields: [teamId], references: [id])
+  tasks             Task[]
+  issues            Issue[]
+  metrics           PerformanceMetric[]
+  linkedNote        Note?
+  githubPullRequests GitHubPullRequest[]
+  githubCommits     GitHubCommit[]
+  agentHandoffs     AgentHandoff[]
 
   @@map("projects")
 }
@@ -180,29 +188,82 @@ model Issue {
 // ─── NOTES & IDEAS ──────────────────────────────────────────
 
 model Note {
-  id          String   @id @default(cuid())
-  title       String
-  content     String?
-  contentText String   @default("")
-  blocks      Json?
-  authorId    String
-  parentId    String?
-  position    Int      @default(0)
-  isPinned    Boolean  @default(false)
-  notionPageId String?  @unique
-  notionUrl    String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String    @id @default(cuid())
+  title           String
+  emoji           String?   @db.VarChar(16)
+  content         String?
+  contentText     String    @default("")
+  blocks          Json?
+  authorId        String
+  parentId        String?
+  position        Int       @default(0)
+  isPinned        Boolean   @default(false)
+  notionPageId    String?   @unique
+  notionUrl       String?
+  linkedProjectId String?   @unique
+  isAutoCreated   Boolean   @default(false)
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   author          User              @relation(fields: [authorId], references: [id])
   parent          Note?             @relation("NoteTree", fields: [parentId], references: [id], onDelete: Cascade)
   children        Note[]            @relation("NoteTree")
   tags            Tag[]             @relation("NoteTags")
   aiConversations AIConversation[]
+  linkedProject   Project?          @relation(fields: [linkedProjectId], references: [id], onDelete: SetNull)
+  versions        NoteVersion[]
+  outboundLinks   NoteLink[]        @relation("NoteLinkSource")
+  inboundLinks    NoteLink[]        @relation("NoteLinkTarget")
 
   @@index([authorId, parentId, position])
   @@index([notionPageId])
+  @@index([linkedProjectId])
+  @@index([authorId, deletedAt])
   @@map("notes")
+}
+
+// ─── NOTE BIDIRECTIONAL LINKS ───────────────────────────────
+
+model NoteLink {
+  id           String   @id @default(cuid())
+  sourceNoteId String
+  targetNoteId String
+  /// "mention" (inline @-chip) or "embed" (full block)
+  kind         String   @default("mention")
+  /// Block id within the source document where the link appears (best-effort)
+  blockId      String?
+  createdAt    DateTime @default(now())
+
+  source Note @relation("NoteLinkSource", fields: [sourceNoteId], references: [id], onDelete: Cascade)
+  target Note @relation("NoteLinkTarget", fields: [targetNoteId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceNoteId, targetNoteId, kind, blockId])
+  @@index([targetNoteId])
+  @@index([sourceNoteId])
+  @@map("note_links")
+}
+
+// ─── NOTE VERSION HISTORY ───────────────────────────────────
+
+model NoteVersion {
+  id           String   @id @default(cuid())
+  noteId       String
+  editorUserId String
+  source       String   // "user-save" | "ai-edit" | "manual" | "restore"
+  aiTool       String?  // e.g. "appendToNote", "editSection" when source = "ai-edit"
+  title        String
+  blocks       Json
+  contentText  String   @default("")
+  sizeBytes    Int      @default(0)
+  snapshotAt   DateTime @default(now())
+
+  note   Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  editor User @relation(fields: [editorUserId], references: [id])
+
+  @@index([noteId, snapshotAt])
+  @@index([editorUserId])
+  @@map("note_versions")
 }
 
 model Tag {
@@ -381,4 +442,156 @@ model DailyCodingSummary {
   @@unique([userId, date])
   @@index([teamId, date])
   @@map("daily_coding_summaries")
+}
+
+// ─── ACTIVITY EVENTS & ENTITY LINKS ─────────────────────────
+
+model ActivityEvent {
+  id          String   @id @default(cuid())
+  type        String   // e.g. "task.created", "issue.closed", "note.updated", "github.pr.merged"
+  actorId     String?
+  actorType   String   @default("user") // "user" | "system" | "integration"
+  teamId      String?
+  projectId   String?
+  subjectType String   // "task" | "issue" | "note" | "pr" | "commit" | "handoff"
+  subjectId   String
+  payload     Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([teamId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([subjectType, subjectId])
+  @@index([actorId, createdAt])
+  @@map("activity_events")
+}
+
+model EntityLink {
+  id         String   @id @default(cuid())
+  sourceType String   // "task" | "issue" | "note" | "github_pr" | "github_issue" | "handoff"
+  sourceId   String
+  targetType String
+  targetId   String
+  linkType   String   // "references" | "implements" | "caused_by" | "blocks"
+  metadata   Json?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  @@unique([sourceType, sourceId, targetType, targetId, linkType])
+  @@index([sourceType, sourceId])
+  @@index([targetType, targetId])
+  @@map("entity_links")
+}
+
+// ─── GITHUB SYNC (MIRROR TABLES) ────────────────────────────
+
+model GitHubPullRequest {
+  id                 String    @id @default(cuid())
+  projectId          String
+  githubPrId         Int
+  githubRepoFullName String
+  number             Int
+  title              String
+  state              String    // "open" | "closed" | "merged"
+  authorGithubLogin  String?
+  authorUserId       String?
+  headBranch         String
+  baseBranch         String
+  body               String?
+  mergedAt           DateTime?
+  closedAt           DateTime?
+  createdAt          DateTime
+  updatedAt          DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([githubRepoFullName, number])
+  @@index([projectId, state])
+  @@index([authorUserId])
+  @@map("github_pull_requests")
+}
+
+model GitHubCommit {
+  id                String   @id @default(cuid())
+  projectId         String
+  sha               String
+  message           String
+  authorGithubLogin String?
+  authorUserId      String?
+  timestamp         DateTime
+  additions         Int?
+  deletions         Int?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, sha])
+  @@index([authorUserId, timestamp])
+  @@map("github_commits")
+}
+
+// ─── NEWS DIGEST ────────────────────────────────────────────
+
+model NewsDigest {
+  id        String    @id @default(cuid())
+  userId    String
+  date      String    // "YYYY-MM-DD"
+  topics    Json      // extracted topics used for search
+  articles  Json      // [{title, url, snippet, topic, summary}]
+  synthesis String    @db.Text
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("news_digests")
+}
+
+// ─── AGENT HANDOFFS ─────────────────────────────────────────
+
+model AgentHandoff {
+  id              String    @id @default(cuid())
+  userId          String
+  projectId       String
+  title           String
+  description     String    @db.Text
+  contextPayload  Json      // assembled from tasks, issues, notes, repo context
+  agentProvider   String    // "codex" | "claude-code"
+  agentConfig     Json?
+  status          String    @default("DRAFT") // DRAFT | SUBMITTED | IN_PROGRESS | AWAITING_REVIEW | APPROVED | REJECTED
+  submittedAt     DateTime?
+  externalRunId   String?
+  externalUrl     String?
+  resultSummary   String?   @db.Text
+  resultArtifacts Json?     // [{type: "patch"|"pr_url"|"file", content, path}]
+  completedAt     DateTime?
+  reviewedBy      String?
+  reviewStatus    String?   // "approved" | "rejected"
+  reviewNotes     String?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([projectId, status])
+  @@map("agent_handoffs")
+}
+
+// ─── USER NOTE PREFERENCES ──────────────────────────────────
+
+model UserNotePreference {
+  userId                 String   @id
+  autoCreateProjectNotes Boolean  @default(true)
+  projectNotesParentId   String?
+  viewMode               String   @default("cards")
+  sortBy                 String   @default("updatedDesc")
+  groupBy                String   @default("none")
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_note_preferences")
 }

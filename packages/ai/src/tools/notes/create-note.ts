@@ -83,6 +83,25 @@ export function makeCreateNoteTool(userId: string) {
         },
       });
 
+      // Initial version so the timeline shows AI-created note as v1.
+      try {
+        const blocksJson = (note.blocks ?? []) as object;
+        await prisma.noteVersion.create({
+          data: {
+            noteId: note.id,
+            editorUserId: userId,
+            source: "ai-edit",
+            aiTool: "createNote",
+            title: note.title,
+            blocks: blocksJson as object,
+            contentText: note.contentText,
+            sizeBytes: Buffer.byteLength(JSON.stringify(blocksJson), "utf8"),
+          },
+        });
+      } catch (err) {
+        console.error("[createNote] initial version write failed", err);
+      }
+
       return {
         id: note.id,
         title: note.title,

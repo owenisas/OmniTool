@@ -72,9 +72,25 @@ export async function POST(req: Request) {
   // ------------------------------------------------------------------
   // 3. Signature valid -- process the event.
   // ------------------------------------------------------------------
-  const event = req.headers.get("x-github-event");
+  const event = req.headers.get("x-github-event") ?? "unknown";
+  const deliveryId = req.headers.get("x-github-delivery") ?? "unknown";
 
-  console.log(`Received GitHub webhook: ${event}`);
+  console.log(`[GitHub Webhook] event=${event} delivery=${deliveryId}`);
 
-  return NextResponse.json({ received: true });
+  // Dynamically import handlers to avoid loading DB clients at module scope
+  const { webhookHandlers } = await import("./handlers");
+  const handler = webhookHandlers[event];
+
+  if (handler) {
+    try {
+      const payload = JSON.parse(body) as Record<string, unknown>;
+      await handler(payload, { event, deliveryId });
+    } catch (err) {
+      console.error(`[GitHub Webhook] Handler error for ${event}:`, err);
+      // Return 200 anyway — GitHub retries on non-2xx and we don't want
+      // repeated retries for a processing bug.
+    }
+  }
+
+  return NextResponse.json({ received: true, event });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -15,8 +15,8 @@ import {
   UserCircle,
   ClipboardList,
   CheckSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
+  ChevronLeft,
+  ChevronRight,
   Users,
 } from "lucide-react";
 import {
@@ -27,6 +27,8 @@ import {
 } from "@omnitool/ui/components/tooltip";
 import { TeamSwitcher } from "./team-switcher";
 import { useSidebar } from "./sidebar-context";
+import { SignOutButton } from "./sign-out-button";
+import { SidebarNoteTree } from "./sidebar-note-tree";
 import { OmniToolLogo, OmniToolMark } from "@/components/icons/brand-icons";
 
 interface NavItem {
@@ -88,11 +90,124 @@ export function navigationActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/**
+ * Returns true on devices that support hover and have a fine pointer
+ * (i.e. mouse). Disables hover-expand on touch devices where the gesture
+ * would feel broken.
+ */
+function useCanHover(): boolean {
+  const [canHover, setCanHover] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(hover: hover) and (pointer: fine)");
+    setCanHover(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setCanHover(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return canHover;
+}
+
+const HOVER_ENTER_DELAY_MS = 80;
+
+/**
+ * A single nav row that renders the same DOM in collapsed and expanded
+ * modes — the label uses max-width + opacity transitions to slide in/out,
+ * keeping the icon stable. Tooltip only fires when collapsed.
+ */
+function NavRow({
+  item,
+  isActive,
+  collapsed,
+  onNavigate,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  collapsed: boolean;
+  onNavigate: (href: string) => void;
+}) {
+  const link = (
+    <Link
+      href={item.href}
+      prefetch={true}
+      onClick={(e) => {
+        e.preventDefault();
+        onNavigate(item.href);
+      }}
+      className={cn(
+        "group/navrow relative flex h-10 items-center overflow-hidden rounded-lg transition-all duration-300 ease-in-out",
+        "active:scale-[0.98]",
+        collapsed ? "justify-center px-0" : "gap-3 px-3",
+        isActive
+          ? "bg-accent text-accent-foreground shadow-sm"
+          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80",
+      )}
+    >
+      <item.icon className="h-[18px] w-[18px] shrink-0" />
+      <span
+        className={cn(
+          "truncate text-sm font-medium transition-[max-width,opacity,margin] duration-300 ease-in-out",
+          collapsed
+            ? "pointer-events-none ml-0 max-w-0 opacity-0"
+            : "ml-0 max-w-[180px] opacity-100",
+        )}
+      >
+        {item.name}
+      </span>
+    </Link>
+  );
+
+  if (!collapsed) return link;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={8}>
+        {item.name}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const { isCollapsed, setCollapsed } = useSidebar();
+
+  const canHover = useCanHover();
+  const [isHoverExpanded, setIsHoverExpanded] = useState(false);
+  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reset hover state on route change so we don't stay expanded after nav.
+  useEffect(() => {
+    setIsHoverExpanded(false);
+    if (enterTimerRef.current) {
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
+  }, [pathname]);
+
+  function handleMouseEnter() {
+    if (!canHover || !isCollapsed) return;
+    if (enterTimerRef.current) clearTimeout(enterTimerRef.current);
+    enterTimerRef.current = setTimeout(() => {
+      setIsHoverExpanded(true);
+    }, HOVER_ENTER_DELAY_MS);
+  }
+
+  function handleMouseLeave() {
+    if (enterTimerRef.current) {
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
+    setIsHoverExpanded(false);
+  }
+
+  const showOverlay = isCollapsed && isHoverExpanded && canHover;
+  // Effective collapsed state for inner content (overlay shows expanded layout
+  // while keeping the outer rail width reserved).
+  const collapsed = isCollapsed && !showOverlay;
 
   function navigate(href: string) {
     startTransition(() => {
@@ -103,208 +218,157 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "hidden flex-col border-r bg-card transition-[width] duration-200 md:flex",
-        isCollapsed ? "w-16" : "w-64"
+        "group/sidebar relative hidden flex-col md:flex transition-[width] duration-300 ease-in-out",
+        // Outer always reserves the rail/full width — overlay doesn't push content.
+        isCollapsed ? "w-16" : "w-64",
       )}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
-      {/* App branding + team switcher */}
-      {!isCollapsed ? (
-        <div className="flex flex-col">
-          {/* App logo bar */}
-          <div className="flex h-14 items-center gap-2.5 border-b px-4">
-            <OmniToolLogo className="h-7 w-7 shrink-0" />
-            <span className="text-sm font-bold tracking-tight">OmniTool</span>
-          </div>
-          {/* Team switcher below logo */}
-          <TeamSwitcher />
-        </div>
-      ) : (
-        <div className="flex flex-col items-center">
-          {/* Collapsed: app icon */}
-          <TooltipProvider delayDuration={0}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href="/"
-                  className="flex h-14 w-full items-center justify-center border-b transition-colors hover:bg-accent/50"
-                >
-                  <OmniToolMark className="h-6 w-6" />
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={8}>
-                OmniTool
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      )}
-
-      <TooltipProvider delayDuration={0}>
-        <nav
-          className={cn(
-            "flex-1 overflow-y-auto",
-            isCollapsed ? "p-2 space-y-1" : "p-3 space-y-4"
-          )}
-        >
-          {navSections.map((section) => (
-            <div key={section.label}>
-              {/* Section label (only when expanded) */}
-              {!isCollapsed && (
-                <p className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  {section.label}
-                </p>
-              )}
-              <div className="space-y-0.5">
-                {section.items.map((item) => {
-                  const isActive = navigationActive(pathname, item.href);
-
-                  if (isCollapsed) {
-                    return (
-                      <Tooltip key={item.name}>
-                        <TooltipTrigger asChild>
-                          <Link
-                            href={item.href}
-                            prefetch={true}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              navigate(item.href);
-                            }}
-                            className={cn(
-                              "flex h-10 w-full items-center justify-center rounded-lg transition-all duration-150",
-                              "active:scale-95",
-                              isActive
-                                ? "bg-accent text-accent-foreground shadow-sm"
-                                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80"
-                            )}
-                          >
-                            <item.icon className="h-[18px] w-[18px]" />
-                          </Link>
-                        </TooltipTrigger>
-                        <TooltipContent side="right" sideOffset={8}>
-                          {item.name}
-                        </TooltipContent>
-                      </Tooltip>
-                    );
-                  }
-
-                  return (
-                    <Link
-                      key={item.name}
-                      href={item.href}
-                      prefetch={true}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        navigate(item.href);
-                      }}
-                      className={cn(
-                        "flex h-9 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-150",
-                        "active:scale-[0.98]",
-                        isActive
-                          ? "bg-accent text-accent-foreground shadow-sm"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80"
-                      )}
-                    >
-                      <item.icon className="h-4 w-4 shrink-0" />
-                      <span className="truncate">{item.name}</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </nav>
-
-        <div
-          className={cn(
-            "border-t space-y-0.5",
-            isCollapsed ? "p-2" : "p-3"
-          )}
-        >
-          {bottomNav.map((item) => {
-            const isActive = pathname.startsWith(item.href);
-
-            if (isCollapsed) {
-              return (
-                <Tooltip key={item.name}>
-                  <TooltipTrigger asChild>
-                    <Link
-                      href={item.href}
-                      prefetch={true}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        navigate(item.href);
-                      }}
-                      className={cn(
-                        "flex h-10 w-full items-center justify-center rounded-lg transition-all duration-150",
-                        "active:scale-95",
-                        isActive
-                          ? "bg-accent text-accent-foreground shadow-sm"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80"
-                      )}
-                    >
-                      <item.icon className="h-[18px] w-[18px]" />
-                    </Link>
-                  </TooltipTrigger>
-                  <TooltipContent side="right" sideOffset={8}>
-                    {item.name}
-                  </TooltipContent>
-                </Tooltip>
-              );
-            }
-
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                prefetch={true}
-                onClick={(e) => {
-                  e.preventDefault();
-                  navigate(item.href);
-                }}
-                className={cn(
-                  "flex h-9 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-all duration-150",
-                  "active:scale-[0.98]",
-                  isActive
-                    ? "bg-accent text-accent-foreground shadow-sm"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground active:bg-accent/80"
-                )}
-              >
-                <item.icon className="h-4 w-4 shrink-0" />
-                <span className="truncate">{item.name}</span>
-              </Link>
-            );
-          })}
-
-          {/* Collapse toggle */}
+      {/* Inner panel: fills outer normally, becomes an absolute overlay when hovering the rail. */}
+      <div
+        className={cn(
+          "flex h-full flex-col border-r bg-card transition-[width] duration-300 ease-in-out",
+          showOverlay
+            ? "absolute inset-y-0 left-0 z-30 w-64 shadow-xl"
+            : "w-full",
+        )}
+      >
+        {/* Floating edge collapse toggle — appears on sidebar hover */}
+        <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => setCollapsed(!isCollapsed)}
                 className={cn(
-                  "flex w-full items-center rounded-lg text-sm font-medium text-muted-foreground transition-all duration-150 hover:bg-accent hover:text-accent-foreground active:scale-[0.98] active:bg-accent/80",
-                  isCollapsed
-                    ? "h-10 justify-center"
-                    : "h-9 gap-3 px-3"
+                  "absolute -right-3 top-5 z-20",
+                  "flex h-6 w-6 items-center justify-center rounded-full",
+                  "border bg-background shadow-sm",
+                  "text-muted-foreground",
+                  "opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100",
+                  "hover:border-foreground/20 hover:text-foreground hover:shadow-md",
+                  "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 )}
+                aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 {isCollapsed ? (
-                  <PanelLeftOpen className="h-4 w-4" />
+                  <ChevronRight className="h-3 w-3" />
                 ) : (
-                  <>
-                    <PanelLeftClose className="h-4 w-4 shrink-0" />
-                    <span>Collapse</span>
-                  </>
+                  <ChevronLeft className="h-3 w-3" />
                 )}
               </button>
             </TooltipTrigger>
-            {isCollapsed && (
-              <TooltipContent side="right" sideOffset={8}>
-                Expand sidebar
-              </TooltipContent>
-            )}
+            <TooltipContent side="right" sideOffset={12}>
+              {isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            </TooltipContent>
           </Tooltip>
+        </TooltipProvider>
+
+        {/* App branding row — single layout that animates between rail (icon-only)
+            and expanded (icon + wordmark). Wordmark fades + width-collapses. */}
+        <div className="flex h-14 shrink-0 items-center border-b">
+          <Link
+            href="/"
+            aria-label="OmniTool home"
+            className={cn(
+              "flex h-14 w-full items-center overflow-hidden transition-[gap,padding] duration-300 ease-in-out hover:bg-accent/30",
+              collapsed ? "justify-center px-0" : "gap-2.5 px-4",
+            )}
+          >
+            {collapsed ? (
+              <OmniToolMark className="h-6 w-6 shrink-0" />
+            ) : (
+              <OmniToolLogo className="h-7 w-7 shrink-0" />
+            )}
+            <span
+              className={cn(
+                "truncate text-sm font-bold tracking-tight transition-[max-width,opacity] duration-300 ease-in-out",
+                collapsed
+                  ? "pointer-events-none max-w-0 opacity-0"
+                  : "max-w-[180px] opacity-100",
+              )}
+            >
+              OmniTool
+            </span>
+          </Link>
         </div>
-      </TooltipProvider>
+
+        {/* TeamSwitcher — collapses to height 0 with fade when in rail mode */}
+        <div
+          className={cn(
+            "shrink-0 overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out",
+            collapsed ? "max-h-0 opacity-0" : "max-h-20 opacity-100",
+          )}
+        >
+          <TeamSwitcher />
+        </div>
+
+        <TooltipProvider delayDuration={0}>
+          <nav
+            className={cn(
+              "flex-1 space-y-4 overflow-y-auto transition-[padding] duration-300 ease-in-out",
+              collapsed ? "p-2" : "p-3",
+            )}
+          >
+            {navSections.map((section) => (
+              <div key={section.label}>
+                {/* Section label — animates max-height + opacity, no DOM swap */}
+                <p
+                  className={cn(
+                    "px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 transition-[max-height,opacity,margin] duration-300 ease-in-out",
+                    collapsed
+                      ? "pointer-events-none mb-0 max-h-0 overflow-hidden opacity-0"
+                      : "mb-1 max-h-6 opacity-100",
+                  )}
+                >
+                  {section.label}
+                </p>
+                <div className="space-y-0.5">
+                  {section.items.map((item) => (
+                    <NavRow
+                      key={item.name}
+                      item={item}
+                      isActive={navigationActive(pathname, item.href)}
+                      collapsed={collapsed}
+                      onNavigate={navigate}
+                    />
+                  ))}
+                </div>
+                {section.label === "Workspace" && (
+                  <div
+                    className={cn(
+                      "mt-1 overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out",
+                      collapsed
+                        ? "pointer-events-none max-h-0 opacity-0"
+                        : "max-h-[40vh] opacity-100",
+                    )}
+                  >
+                    <SidebarNoteTree collapsed={collapsed} />
+                  </div>
+                )}
+              </div>
+            ))}
+          </nav>
+
+          <div
+            className={cn(
+              "shrink-0 space-y-0.5 border-t transition-[padding] duration-300 ease-in-out",
+              collapsed ? "p-2" : "p-3",
+            )}
+          >
+            {bottomNav.map((item) => (
+              <NavRow
+                key={item.name}
+                item={item}
+                isActive={pathname.startsWith(item.href)}
+                collapsed={collapsed}
+                onNavigate={navigate}
+              />
+            ))}
+            <SignOutButton variant={collapsed ? "rail" : "expanded"} />
+          </div>
+        </TooltipProvider>
+      </div>
     </aside>
   );
 }

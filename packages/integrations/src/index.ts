@@ -9,6 +9,11 @@ export {
   getOrgDetails,
   listOrgRepos,
   listOrgMembers,
+  createRepoWebhook,
+  deleteRepoWebhook,
+  createGitHubIssue,
+  updateGitHubIssue,
+  addGitHubComment,
 } from "./providers/github";
 export {
   createNotionClient,
@@ -19,6 +24,7 @@ export {
   notionBlocksToPlainText,
   notionBlocksToMarkdown,
   listNotionPages,
+  getNotionParentPageId,
 } from "./providers/notion";
 export { createSlackClient } from "./providers/slack";
 export { createLinearClient } from "./providers/linear";

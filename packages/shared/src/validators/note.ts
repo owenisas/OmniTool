@@ -55,19 +55,23 @@ export const blocksJsonSchema = z.any().superRefine((val, ctx) => {
 
 export const createNoteSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
+  emoji: z.string().max(16).nullable().optional(),
   blocks: blocksJsonSchema,
   contentText: z.string().max(100_000).optional().default(""),
   parentId: z.string().cuid().nullable().optional(),
   tags: z.array(z.string()).optional(),
+  linkedProjectId: z.string().cuid().nullable().optional(),
 });
 
 export const updateNoteSchema = z.object({
   id: z.string().cuid(),
   title: z.string().min(1).max(200).optional(),
+  emoji: z.string().max(16).nullable().optional(),
   blocks: blocksJsonSchema.optional(),
   contentText: z.string().max(100_000).optional(),
   isPinned: z.boolean().optional(),
   tags: z.array(z.string()).optional(),
+  linkedProjectId: z.string().cuid().nullable().optional(),
 });
 
 export const moveNoteSchema = z.object({
