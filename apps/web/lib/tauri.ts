@@ -84,19 +84,31 @@ export async function openInBrowser(url: string): Promise<void> {
 }
 
 /**
- * Navigate to an OAuth authorize URL.
+ * Start an OAuth flow against one of the integration providers.
  *
- * On web: navigates in the current window.
- * In Tauri desktop: also navigates in the current window. The Rust layer
- * intercepts any external URL navigation (github.com, notion.com, etc.)
- * and opens it in the system browser automatically. This means:
- * 1. Webview navigates to /api/integrations/github/authorize (localhost — allowed)
- * 2. Server redirects to https://github.com/login/oauth/...
- * 3. Rust intercepts the github.com navigation → opens in system browser
- * 4. User authorizes in browser (already logged into GitHub there)
- * 5. Callback returns to localhost → server processes → deep link back to app
+ * - **Web**: navigates the current tab to the local authorize route, which
+ *   302s to the provider. Standard browser flow.
+ * - **Desktop (Tauri)**: fetches the authorize route (server returns
+ *   `{ url }` JSON for desktop), then opens that URL in the system browser
+ *   via the shell plugin. The webview stays put — no navigation, no
+ *   stuck-on-blank-page state. The provider's callback eventually fires
+ *   `omnitool://oauth-complete?...` which the deep-link handlers pick up.
  */
-export function startOAuthFlow(authorizeUrl: string): void {
+export async function startOAuthFlow(authorizeUrl: string): Promise<void> {
+  if (isTauri()) {
+    const res = await fetch(authorizeUrl, { credentials: "include" });
+    if (!res.ok) {
+      throw new Error(
+        `OAuth authorize failed: ${res.status} ${res.statusText}`,
+      );
+    }
+    const body = (await res.json()) as { url?: string };
+    if (!body.url) {
+      throw new Error("OAuth authorize returned no URL");
+    }
+    await openInBrowser(body.url);
+    return;
+  }
   window.location.href = authorizeUrl;
 }
 

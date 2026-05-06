@@ -61,14 +61,14 @@ export async function GET(request: Request) {
 
   const authUrl = `${github.authUrl}?${params.toString()}`;
 
-  // Desktop: return HTML with JS redirect so Tauri's on_navigation handler
-  // intercepts the external URL and opens it in the system browser.
-  // HTTP 302 redirects are followed internally by WKWebView without triggering on_navigation.
+  // Desktop: return the authorize URL as JSON so the client can open it in
+  // the system browser via `openInBrowser` without navigating the webview.
+  // The previous HTML+JS workaround relied on Tauri's `on_navigation` handler
+  // to intercept the external URL and cancel the webview navigation, but
+  // cancellation leaves the webview stuck on the empty authorize page —
+  // looks like a crash to the user.
   if (isDesktop) {
-    return new NextResponse(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body><script>window.location.href=${JSON.stringify(authUrl)};</script></body></html>`,
-      { status: 200, headers: { "Content-Type": "text/html" } }
-    );
+    return NextResponse.json({ url: authUrl });
   }
 
   const response = NextResponse.redirect(authUrl);

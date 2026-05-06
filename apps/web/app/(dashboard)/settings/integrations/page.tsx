@@ -228,7 +228,7 @@ export default function IntegrationsPage() {
     if (startedOAuthRef.current === connectParam) return;
     startedOAuthRef.current = connectParam;
 
-    startOAuthFlow(
+    void startOAuthFlow(
       connectParam === "github"
         ? "/api/integrations/github/authorize"
         : "/api/integrations/notion/authorize",
@@ -320,9 +320,11 @@ export default function IntegrationsPage() {
               ) : (
                 <Button
                   size="sm"
-                  onClick={() =>
-                    startOAuthFlow("/api/integrations/github/authorize")
-                  }
+                  onClick={() => {
+                    void startOAuthFlow(
+                      "/api/integrations/github/authorize",
+                    );
+                  }}
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                 </Button>
@@ -359,9 +361,11 @@ export default function IntegrationsPage() {
               ) : (
                 <Button
                   size="sm"
-                  onClick={() =>
-                    startOAuthFlow("/api/integrations/notion/authorize")
-                  }
+                  onClick={() => {
+                    void startOAuthFlow(
+                      "/api/integrations/notion/authorize",
+                    );
+                  }}
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                 </Button>
