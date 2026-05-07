@@ -6,6 +6,7 @@ import {
   isDesktopOAuthState,
   verifyDesktopOAuthState,
 } from "@/lib/oauth-state";
+import { desktopOAuthCompletePage } from "@/lib/oauth-complete-page";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -76,15 +77,16 @@ export async function GET(request: NextRequest) {
 
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
-      console.error("[github-oauth] Token error:", tokenData.error);
+      const reason = `${tokenData.error}${
+        tokenData.error_description ? `: ${tokenData.error_description}` : ""
+      }`;
+      console.error("[github-oauth] Token error:", reason);
       if (isDesktop) {
-        return NextResponse.redirect(
-          "omnitool://oauth-complete?provider=github&status=error",
-        );
+        return desktopOAuthCompletePage("github", "error", reason);
       }
       return NextResponse.redirect(
         new URL(
-          "/settings/integrations?error=token_exchange",
+          `/settings/integrations?error=${encodeURIComponent(reason)}`,
           process.env.AUTH_URL,
         ),
       );
@@ -215,22 +217,34 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Update real user's GitHub info
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        githubUserId: ghUser.id,
-        githubLogin: ghUser.login,
-        avatarUrl: ghUser.avatar_url ?? undefined,
-      },
+    // Update real user's GitHub info. The `githubUserId` column is `@unique`,
+    // so any OTHER user row that previously held this id must release it
+    // first (e.g., user re-connected after disconnect, or merging accounts
+    // where the placeholder-merge above didn't apply because the conflicting
+    // row was a real signed-up user). Doing it in one transaction keeps the
+    // unique constraint satisfied at every visible state.
+    await prisma.$transaction(async (tx) => {
+      await tx.user.updateMany({
+        where: {
+          githubUserId: ghUser.id,
+          NOT: { id: userId },
+        },
+        data: { githubUserId: null, githubLogin: null },
+      });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          githubUserId: ghUser.id,
+          githubLogin: ghUser.login,
+          avatarUrl: ghUser.avatar_url ?? undefined,
+        },
+      });
     });
 
-    // Desktop flow: redirect to deep link so focus returns to the app.
+    // Desktop flow: show page with deep link + manual "Open" button.
     // Web flow: redirect to integrations page.
     if (isDesktop) {
-      return NextResponse.redirect(
-        "omnitool://oauth-complete?provider=github&status=success",
-      );
+      return desktopOAuthCompletePage("github", "success");
     }
 
     const response = NextResponse.redirect(
@@ -240,15 +254,14 @@ export async function GET(request: NextRequest) {
     response.cookies.delete("github-oauth-state");
     return response;
   } catch (error) {
-    console.error("[github-oauth] Callback error:", error);
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("[github-oauth] Callback error:", reason);
     if (isDesktop) {
-      return NextResponse.redirect(
-        "omnitool://oauth-complete?provider=github&status=error",
-      );
+      return desktopOAuthCompletePage("github", "error", reason);
     }
     return NextResponse.redirect(
       new URL(
-        "/settings/integrations?error=callback_failed",
+        `/settings/integrations?error=${encodeURIComponent(reason)}`,
         process.env.AUTH_URL,
       ),
     );

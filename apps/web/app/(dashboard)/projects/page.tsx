@@ -39,11 +39,13 @@ export default async function ProjectsPage() {
             <Link key={project.id} href={`/projects/${project.slug}`}>
               <Card className="hover:bg-accent/50 transition-colors cursor-pointer h-full">
                 <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <CardTitle className="text-lg leading-tight">
+                  <div className="flex items-start justify-between gap-2">
+                    <CardTitle className="text-lg leading-tight min-w-0 truncate">
                       {project.name}
                     </CardTitle>
-                    <Badge className={statusColors[project.status] || ""}>
+                    <Badge
+                      className={`${statusColors[project.status] || ""} shrink-0`}
+                    >
                       {project.status}
                     </Badge>
                   </div>
@@ -54,17 +56,19 @@ export default async function ProjectsPage() {
                   )}
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                    <span className="flex items-center gap-1.5">
-                      <CheckSquare className="h-3.5 w-3.5" />
-                      {project._count.tasks} tasks
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <Bug className="h-3.5 w-3.5" />
-                      {project._count.issues} issues
-                    </span>
+                  <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-3 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <CheckSquare className="h-3.5 w-3.5 shrink-0" />
+                        {project._count.tasks} tasks
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <Bug className="h-3.5 w-3.5 shrink-0" />
+                        {project._count.issues} issues
+                      </span>
+                    </div>
                     {project.team && (
-                      <span className="ml-auto text-xs">
+                      <span className="min-w-0 truncate text-xs">
                         {project.team.name}
                       </span>
                     )}

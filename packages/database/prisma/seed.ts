@@ -146,6 +146,33 @@ async function main() {
   }
   console.log("Created labels");
 
+  // Seed built-in note templates
+  const builtInTemplates = [
+    { title: "Meeting Notes", emoji: "📋", description: "Structured meeting notes with attendees, agenda, and action items", category: "meetings" },
+    { title: "Weekly Review", emoji: "📊", description: "Weekly progress review with wins, challenges, and next week plans", category: "reviews" },
+    { title: "Design Document", emoji: "🎨", description: "Technical design doc with problem, proposal, alternatives, and timeline", category: "engineering" },
+    { title: "Bug Triage", emoji: "🐛", description: "Bug report template with repro steps, expected/actual behavior, and severity", category: "engineering" },
+    { title: "Sprint Retrospective", emoji: "🔄", description: "Sprint retro with what went well, what didn't, and improvements", category: "agile" },
+  ];
+
+  for (const tmpl of builtInTemplates) {
+    await prisma.noteTemplate.upsert({
+      where: { id: `builtin-${tmpl.category}-${tmpl.title.toLowerCase().replace(/\s+/g, "-")}` },
+      update: {},
+      create: {
+        id: `builtin-${tmpl.category}-${tmpl.title.toLowerCase().replace(/\s+/g, "-")}`,
+        title: tmpl.title,
+        emoji: tmpl.emoji,
+        description: tmpl.description,
+        category: tmpl.category,
+        isBuiltIn: true,
+        blocks: [],
+        authorId: admin.id,
+      },
+    });
+  }
+  console.log("Created built-in note templates");
+
   console.log("Seeding complete!");
 }
 

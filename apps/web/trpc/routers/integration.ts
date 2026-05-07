@@ -307,17 +307,20 @@ const githubRouter = createTRPCRouter({
       let orgName: string;
       let orgDescription: string | null;
       let orgId: number;
+      let orgAvatarUrl: string | null;
 
       if (input.isPersonal) {
         const profile = await getGitHubProfile(octokit);
         orgName = profile.name || profile.login;
         orgDescription = `${profile.login}'s repositories`;
         orgId = 0;
+        orgAvatarUrl = profile.avatarUrl ?? null;
       } else {
         const orgDetails = await getOrgDetails(octokit, input.orgLogin);
         orgName = orgDetails.name;
         orgDescription = orgDetails.description;
         orgId = orgDetails.id;
+        orgAvatarUrl = orgDetails.avatarUrl ?? null;
       }
 
       let projectsCreated = 0;
@@ -338,11 +341,13 @@ const githubRouter = createTRPCRouter({
           update: {
             name: orgName,
             description: orgDescription,
+            avatarUrl: orgAvatarUrl,
           },
           create: {
             name: orgName,
             slug,
             description: orgDescription,
+            avatarUrl: orgAvatarUrl,
             githubOrgId: orgId,
             githubOrgLogin: input.orgLogin,
             githubImportedAt: new Date(),
@@ -361,6 +366,7 @@ const githubRouter = createTRPCRouter({
             data: {
               name: orgName,
               description: orgDescription,
+              avatarUrl: orgAvatarUrl,
             },
           });
         } else {
@@ -374,6 +380,7 @@ const githubRouter = createTRPCRouter({
               name: orgName,
               slug,
               description: orgDescription,
+              avatarUrl: orgAvatarUrl,
               githubOrgId: null,
               githubOrgLogin: personalOrgLogin,
               githubImportedAt: new Date(),

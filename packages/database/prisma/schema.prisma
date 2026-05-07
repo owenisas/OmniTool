@@ -67,6 +67,10 @@ model Team {
   /// compatibility with existing rows.
   kind             String    @default("TEAM")
   ownerId          String?
+  /// Optional avatar/logo. For GitHub-imported teams, set to the org's
+  /// avatar URL on import; for personal-imported teams, the user's avatar.
+  /// User-created teams leave this null (UI falls back to colored initial).
+  avatarUrl        String?
   githubOrgId      Int?      @unique
   githubOrgLogin   String?   @unique
   githubImportedAt DateTime?
@@ -180,20 +184,26 @@ model Task {
 // ─── ISSUES ─────────────────────────────────────────────────
 
 model Issue {
-  id          String    @id @default(cuid())
-  identifier  String    @unique
-  title       String
-  description String?
-  status      String    @default("OPEN")
-  priority    String    @default("MEDIUM")
-  severity    String?
-  projectId   String
-  assigneeId  String?
-  reporterId  String
-  dueDate     DateTime?
-  resolvedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  identifier         String    @unique
+  title              String
+  description        String?
+  status             String    @default("OPEN")
+  priority           String    @default("MEDIUM")
+  severity           String?
+  projectId          String
+  assigneeId         String?
+  reporterId         String
+  dueDate            DateTime?
+  resolvedAt         DateTime?
+  githubIssueNumber  Int?
+  githubRepoFullName String?
+  linearIssueId      String?   @unique
+  linearTeamKey      String?
+  linearIdentifier   String?
+  linearSyncedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   assignee User?    @relation("IssueAssignee", fields: [assigneeId], references: [id])
@@ -204,6 +214,7 @@ model Issue {
   @@index([projectId])
   @@index([assigneeId])
   @@index([reporterId])
+  @@index([githubRepoFullName, githubIssueNumber])
   @@map("issues")
 }
 
@@ -245,6 +256,9 @@ model Note {
   mentions        NoteMention[]
   comments        NoteComment[]
   commentReads    NoteCommentRead[]
+  database        NoteDatabase?
+  databaseRow     NoteDatabaseRow?
+  shares          NoteShare[]
 
   @@index([authorId, parentId, position])
   @@index([teamId, parentId, position])
@@ -693,4 +707,201 @@ model UserNotePreference {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_note_preferences")
+}
+
+// ─── NOTE TEMPLATES ─────────────────────────────────────────
+
+model NoteTemplate {
+  id          String   @id @default(cuid())
+  title       String
+  emoji       String?  @db.VarChar(16)
+  description String?
+  blocks      Json
+  contentText String   @default("")
+  authorId    String
+  teamId      String?
+  isBuiltIn   Boolean  @default(false)
+  category    String   @default("general")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([teamId])
+  @@index([authorId])
+  @@map("note_templates")
+}
+
+// ─── NOTE DATABASES (Notion-style structured content) ───────
+
+model NoteDatabase {
+  id        String   @id @default(cuid())
+  noteId    String   @unique
+  schema    Json     // PropertyDefinition[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  note  Note               @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  rows  NoteDatabaseRow[]
+  views NoteDatabaseView[]
+
+  @@map("note_databases")
+}
+
+model NoteDatabaseRow {
+  id         String   @id @default(cuid())
+  databaseId String
+  noteId     String   @unique
+  properties Json     // {[propertyId]: value}
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  database NoteDatabase @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+  note     Note         @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([databaseId, position])
+  @@map("note_database_rows")
+}
+
+model NoteDatabaseView {
+  id         String   @id @default(cuid())
+  databaseId String
+  name       String
+  type       String   // "table" | "board" | "calendar" | "gallery"
+  config     Json     // {filters, sorts, groupBy, hiddenProperties, propertyWidths, ...}
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  database NoteDatabase @relation(fields: [databaseId], references: [id], onDelete: Cascade)
+
+  @@index([databaseId, position])
+  @@map("note_database_views")
+}
+
+// ─── NOTE SHARING ───────────────────────────────────────────
+
+model NoteShare {
+  id         String    @id @default(cuid())
+  noteId     String
+  targetType String    // "user" | "team" | "link" | "public"
+  targetId   String?
+  token      String?   @unique
+  role       String    @default("viewer") // "viewer" | "commenter" | "editor"
+  expiresAt  DateTime?
+  createdBy  String
+  createdAt  DateTime  @default(now())
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, targetType, targetId])
+  @@index([token])
+  @@map("note_shares")
+}
+
+// ─── SYNCED BLOCKS ──────────────────────────────────────────
+
+model SyncedBlock {
+  id        String   @id @default(cuid())
+  authorId  String
+  teamId    String
+  blocks    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([teamId])
+  @@map("synced_blocks")
+}
+
+// ─── WORKFLOW ENGINE ────────────────────────────────────────
+
+model Workflow {
+  id          String   @id @default(cuid())
+  teamId      String
+  name        String
+  description String?
+  status      String   @default("draft") // "active" | "paused" | "draft" | "archived"
+  templateId  String?
+  createdBy   String
+  config      Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  trigger WorkflowTrigger?
+  steps   WorkflowStep[]
+  runs    WorkflowRun[]
+
+  @@index([teamId, status])
+  @@index([createdBy])
+  @@map("workflows")
+}
+
+model WorkflowTrigger {
+  id          String   @id @default(cuid())
+  workflowId  String   @unique
+  kind        String   // "event" | "schedule" | "manual" | "webhook"
+  eventTypes  String?  // JSON array of ActivityEventType values
+  eventFilter Json?
+  cronExpr    String?
+  timezone    String?
+  webhookSlug String?  @unique
+  lastFiredAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@map("workflow_triggers")
+}
+
+model WorkflowStep {
+  id         String   @id @default(cuid())
+  workflowId String
+  position   Int
+  kind       String   // "agent" | "action" | "condition" | "approval" | "delay" | "parallel"
+  config     Json
+  label      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, position])
+  @@index([workflowId])
+  @@map("workflow_steps")
+}
+
+model WorkflowRun {
+  id          String    @id @default(cuid())
+  workflowId  String
+  status      String    @default("pending") // "pending"|"running"|"completed"|"failed"|"waiting_approval"|"cancelled"
+  triggerData Json?
+  currentStep Int       @default(0)
+  stepResults Json      @default("{}")
+  context     Json      @default("{}")
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  error       String?
+  approvalData Json?
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId, status])
+  @@index([status, startedAt])
+  @@map("workflow_runs")
+}
+
+// ─── SLACK NOTIFICATION CONFIG ──────────────────────────────
+
+model SlackNotificationConfig {
+  id          String   @id @default(cuid())
+  teamId      String
+  channelId   String
+  channelName String
+  eventTypes  String   // JSON array of ActivityEventType values
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([teamId, channelId])
+  @@map("slack_notification_configs")
 }

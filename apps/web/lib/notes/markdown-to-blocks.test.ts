@@ -29,15 +29,15 @@ describe("markdownToBlocksServer", () => {
     );
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.type).toBe("paragraph");
-    const inlines = blocks[0]!.content!;
+    const inlines = blocks[0]!.content! as any[];
     const hasBold = inlines.some(
-      (n) => n.type === "text" && n.styles?.bold === true,
+      (n: any) => n.type === "text" && n.styles?.bold === true,
     );
     const hasItalic = inlines.some(
-      (n) => n.type === "text" && n.styles?.italic === true,
+      (n: any) => n.type === "text" && n.styles?.italic === true,
     );
     const hasCode = inlines.some(
-      (n) => n.type === "text" && n.styles?.code === true,
+      (n: any) => n.type === "text" && n.styles?.code === true,
     );
     expect(hasBold).toBe(true);
     expect(hasItalic).toBe(true);
@@ -46,9 +46,8 @@ describe("markdownToBlocksServer", () => {
 
   it("converts links to link inline content", () => {
     const blocks = markdownToBlocksServer("See [docs](https://example.com).");
-    const link = blocks[0]!.content!.find((n) => n.type === "link");
+    const link = (blocks[0]!.content! as any[]).find((n: any) => n.type === "link");
     expect(link).toBeDefined();
-    // @ts-expect-error narrowed at runtime
     expect(link.href).toBe("https://example.com");
   });
 
@@ -65,9 +64,8 @@ describe("markdownToBlocksServer", () => {
     );
     expect(blocks[0]!.type).toBe("codeBlock");
     expect((blocks[0]!.props as { language: string }).language).toBe("ts");
-    expect(blocks[0]!.content![0]!.type).toBe("text");
-    // @ts-expect-error narrowed at runtime
-    expect(blocks[0]!.content![0]!.text).toContain("const x = 1;");
+    expect((blocks[0]!.content! as any[])[0]!.type).toBe("text");
+    expect((blocks[0]!.content! as any[])[0]!.text).toContain("const x = 1;");
   });
 
   it("falls back to text language when fence has no lang", () => {
@@ -77,8 +75,7 @@ describe("markdownToBlocksServer", () => {
 
   it("escapes backslash sequences", () => {
     const blocks = markdownToBlocksServer("a \\*not bold\\* b");
-    const text = blocks[0]!.content!.map((n) =>
-      // @ts-expect-error inline shape
+    const text = (blocks[0]!.content! as any[]).map((n: any) =>
       n.type === "text" ? n.text : "",
     ).join("");
     expect(text).toBe("a *not bold* b");
@@ -91,8 +88,7 @@ describe("markdownToBlocksServer", () => {
 
   it("does not interpret snake_case as italic", () => {
     const blocks = markdownToBlocksServer("hello_world is fine");
-    const text = blocks[0]!.content!.map((n) =>
-      // @ts-expect-error inline shape
+    const text = (blocks[0]!.content! as any[]).map((n: any) =>
       n.type === "text" ? n.text : "",
     ).join("");
     expect(text).toBe("hello_world is fine");
@@ -125,17 +121,12 @@ describe("markdownToBlocksServer", () => {
     const blocks = markdownToBlocksServer(md);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]!.type).toBe("table");
-    // @ts-expect-error tableContent shape
-    expect(blocks[0]!.content!.type).toBe("tableContent");
-    // @ts-expect-error tableContent shape
-    expect(blocks[0]!.content!.headerRows).toBe(1);
-    // @ts-expect-error tableContent shape
-    expect(blocks[0]!.content!.rows).toHaveLength(3); // header + 2 body rows
-    // @ts-expect-error tableContent shape
-    const headerCells = blocks[0]!.content!.rows[0]!.cells;
+    const tableContent = blocks[0]!.content! as any;
+    expect(tableContent.type).toBe("tableContent");
+    expect(tableContent.headerRows).toBe(1);
+    expect(tableContent.rows).toHaveLength(3); // header + 2 body rows
+    const headerCells = tableContent.rows[0]!.cells;
     expect(headerCells).toHaveLength(2);
-    // First header cell: "h1"
-    // @ts-expect-error inline shape
     expect(headerCells[0]![0]!.text).toBe("h1");
   });
 
@@ -143,8 +134,7 @@ describe("markdownToBlocksServer", () => {
     const md = `| name | url |\n| --- | --- |\n| **bold** | [link](https://x.io) |`;
     const blocks = markdownToBlocksServer(md);
     expect(blocks[0]!.type).toBe("table");
-    // @ts-expect-error tableContent
-    const dataRow = blocks[0]!.content!.rows[1]!.cells;
+    const dataRow = (blocks[0]!.content! as any).rows[1]!.cells;
     // First cell has bold text
     const bold = dataRow[0]!.find(
       (n: { type?: string; styles?: { bold?: boolean } }) =>
@@ -160,9 +150,9 @@ describe("markdownToBlocksServer", () => {
 
   it("handles strikethrough ~~text~~", () => {
     const blocks = markdownToBlocksServer("a ~~struck~~ b");
-    const inline = blocks[0]!.content!;
+    const inline = blocks[0]!.content! as any[];
     const struck = inline.find(
-      (n) => n.type === "text" && n.styles?.strike === true,
+      (n: any) => n.type === "text" && n.styles?.strike === true,
     );
     expect(struck).toBeDefined();
   });

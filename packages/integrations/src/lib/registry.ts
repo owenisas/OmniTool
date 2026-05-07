@@ -49,7 +49,7 @@ const providers: Record<string, ProviderConfig> = {
     slug: "linear",
     icon: "layers",
     description: "Connect Linear to sync issues and track velocity.",
-    scopes: ["read", "write"],
+    scopes: ["read", "write", "issues:create"],
     authUrl: "https://linear.app/oauth/authorize",
     tokenUrl: "https://api.linear.app/oauth/token",
     clientIdEnv: "LINEAR_CLIENT_ID",

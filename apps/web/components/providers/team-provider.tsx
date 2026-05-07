@@ -15,6 +15,7 @@ interface TeamInfo {
   name: string;
   slug: string;
   description: string | null;
+  avatarUrl: string | null;
   githubOrgLogin: string | null;
 }
 
@@ -54,6 +55,7 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
     name: m.team.name,
     slug: m.team.slug,
     description: m.team.description,
+    avatarUrl: m.team.avatarUrl ?? null,
     githubOrgLogin: m.team.githubOrgLogin,
     role: m.role,
   }));

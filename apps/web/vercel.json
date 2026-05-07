@@ -11,7 +11,7 @@
     },
     {
       "path": "/api/cron/handoff-poll",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 8 * * *"
     }
   ]
 }

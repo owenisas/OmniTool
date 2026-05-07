@@ -17,6 +17,12 @@ import { Button } from "@omnitool/ui/components/button";
 import { Badge } from "@omnitool/ui/components/badge";
 import { Separator } from "@omnitool/ui/components/separator";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@omnitool/ui/components/tooltip";
+import {
   Loader2,
   ArrowLeft,
   Lock,
@@ -24,6 +30,7 @@ import {
   FolderGit2,
   Building2,
   AlertCircle,
+  HelpCircle,
 } from "lucide-react";
 import { runBackgroundTask } from "@/lib/background-tasks/run";
 
@@ -146,8 +153,19 @@ export function GitHubImportDialog({
         projectsCreated: number;
         membersImported: number;
         membersSkipped: number;
-      }) =>
-        `Imported ${r.teamName} — ${r.projectsCreated} projects, ${r.membersImported} members`,
+      }) => {
+        if (r.projectsCreated === 0 && r.membersImported === 0) {
+          return `${r.teamName} is up to date — nothing new to import`;
+        }
+        const parts: string[] = [];
+        if (r.projectsCreated > 0) {
+          parts.push(`${r.projectsCreated} new project${r.projectsCreated === 1 ? "" : "s"}`);
+        }
+        if (r.membersImported > 0) {
+          parts.push(`${r.membersImported} new member${r.membersImported === 1 ? "" : "s"}`);
+        }
+        return `Imported into ${r.teamName} — ${parts.join(", ")}`;
+      },
       onViewResult: (r) => {
         switchTeam(r.teamId);
         router.push("/projects");
@@ -183,12 +201,40 @@ export function GitHubImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent
+        className="max-w-2xl max-h-[85vh] flex flex-col"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
         {/* Step 1: Select Organization */}
         {step === 1 && (
           <>
             <DialogHeader>
-              <DialogTitle>Import from GitHub</DialogTitle>
+              <DialogTitle className="flex items-center gap-2">
+                Import from GitHub
+                <TooltipProvider delayDuration={150}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Help: missing organizations"
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <HelpCircle className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="right"
+                      className="max-w-xs whitespace-normal text-left leading-relaxed"
+                    >
+                      Don&apos;t see an organization? Its owner must approve
+                      third-party OAuth apps. Open
+                      github.com/settings/applications, click OmniTool, and
+                      press Grant next to the org. Then disconnect and
+                      reconnect here.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </DialogTitle>
               <DialogDescription>
                 Import your personal repositories or select an organization.
               </DialogDescription>
@@ -298,6 +344,15 @@ export function GitHubImportDialog({
 
               {previewQuery.data && (
                 <>
+                  {previewQuery.data.repos.length > 0 &&
+                    selectableRepos.length === 0 && (
+                      <div className="rounded-md border border-muted bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                        All {previewQuery.data.repos.length} repositor
+                        {previewQuery.data.repos.length === 1 ? "y is" : "ies are"}{" "}
+                        already imported into this team.
+                      </div>
+                    )}
+
                   {/* Repos Section */}
                   <div>
                     <div className="flex items-center justify-between mb-3">

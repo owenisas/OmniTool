@@ -91,6 +91,40 @@ export const transferNoteToTeamspaceSchema = z.object({
   parentId: z.string().cuid().nullable().optional(),
 });
 
+// ─── Advanced note filters ──────────────────────────────────
+
+export const noteFilterConditionSchema = z.object({
+  field: z.enum([
+    "title",
+    "tag",
+    "teamId",
+    "authorId",
+    "createdAt",
+    "updatedAt",
+    "isPinned",
+    "hasChildren",
+    "linkedProjectId",
+  ]),
+  operator: z.enum([
+    "equals",
+    "notEquals",
+    "contains",
+    "before",
+    "after",
+    "isSet",
+    "isNotSet",
+  ]),
+  value: z.union([z.string(), z.boolean(), z.number()]).optional(),
+});
+
+export const noteFilterSchema = z.object({
+  conditions: z.array(noteFilterConditionSchema).max(10),
+  combinator: z.enum(["and", "or"]).default("and"),
+});
+
+export type NoteFilterCondition = z.infer<typeof noteFilterConditionSchema>;
+export type NoteFilter = z.infer<typeof noteFilterSchema>;
+
 export type CreateNoteInput = z.infer<typeof createNoteSchema>;
 export type UpdateNoteInput = z.infer<typeof updateNoteSchema>;
 export type MoveNoteInput = z.infer<typeof moveNoteSchema>;

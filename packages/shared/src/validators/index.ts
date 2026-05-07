@@ -7,3 +7,4 @@ export * from "./note-comment";
 export * from "./team";
 export * from "./integration";
 export * from "./user";
+export * from "./note-share";

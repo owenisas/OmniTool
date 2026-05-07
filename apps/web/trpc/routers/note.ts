@@ -5,7 +5,7 @@ import {
   transferNoteToTeamspaceSchema,
   updateNoteSchema,
 } from "@omnitool/shared/validators";
-import { Prisma } from "@omnitool/database";
+import { Prisma, type PrismaClient } from "@omnitool/database";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -20,6 +20,70 @@ import {
 import { maybeSnapshotNote } from "@/lib/notes/snapshots";
 import { extractNoteLinks } from "@/lib/notes/extract-links";
 import { emitActivityEvent } from "@/lib/activity/emit";
+
+// ─── Share-based access resolution ─────────────────────────
+
+type ShareAccess = {
+  hasAccess: boolean;
+  /** Highest role granted by any matching share: "viewer" | "commenter" | "editor" */
+  role: "viewer" | "commenter" | "editor" | null;
+};
+
+const ROLE_RANK = { viewer: 1, commenter: 2, editor: 3 } as const;
+
+/**
+ * Check whether `userId` has access to a note via NoteShare records.
+ * Returns the highest role across all matching shares (user-targeted shares
+ * and team-targeted shares where the user is a member).
+ *
+ * This is the OR-branch that complements the teamspace membership check:
+ * if the user is NOT in the note's teamspace, they may still have access
+ * via an explicit share.
+ */
+async function checkShareAccess(
+  db: PrismaClient,
+  noteId: string,
+  userId: string,
+  teamspaceIds: string[],
+): Promise<ShareAccess> {
+  const now = new Date();
+
+  const targetConditions: Record<string, unknown>[] = [
+    { targetType: "user", targetId: userId },
+  ];
+  if (teamspaceIds.length > 0) {
+    targetConditions.push({
+      targetType: "team",
+      targetId: { in: teamspaceIds },
+    });
+  }
+
+  const validShares = await db.noteShare.findMany({
+    where: {
+      noteId,
+      AND: [
+        { OR: targetConditions },
+        { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+      ],
+    },
+    select: { role: true },
+  });
+
+  if (validShares.length === 0) {
+    return { hasAccess: false, role: null };
+  }
+
+  // Find highest role
+  let maxRole: "viewer" | "commenter" | "editor" = "viewer";
+  for (const s of validShares) {
+    const role = s.role as "viewer" | "commenter" | "editor";
+    if (ROLE_RANK[role] > ROLE_RANK[maxRole]) {
+      maxRole = role;
+    }
+  }
+
+  return { hasAccess: true, role: maxRole };
+}
 
 const noteListSelect = {
   id: true,
@@ -135,6 +199,111 @@ async function reindexSiblings(
   );
 }
 
+/**
+ * ILIKE fallback for short queries (1-2 chars) or when full-text search
+ * returns zero rows. Mirrors the legacy search behavior: title hits first,
+ * then body hits, deduped, capped at `limit`.
+ */
+async function searchNotesIlike(
+  ctx: { prisma: typeof import("@omnitool/database").prisma; teamspaceIds: string[] },
+  q: string,
+  limit: number,
+  offset: number,
+) {
+  const [titleHits, bodyHits] = await Promise.all([
+    ctx.prisma.note.findMany({
+      where: {
+        teamId: { in: ctx.teamspaceIds },
+        deletedAt: null,
+        title: { contains: q, mode: "insensitive" },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        title: true,
+        emoji: true,
+        contentText: true,
+        parentId: true,
+        updatedAt: true,
+        teamId: true,
+      },
+    }),
+    ctx.prisma.note.findMany({
+      where: {
+        teamId: { in: ctx.teamspaceIds },
+        deletedAt: null,
+        contentText: { contains: q, mode: "insensitive" },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        title: true,
+        emoji: true,
+        contentText: true,
+        parentId: true,
+        updatedAt: true,
+        teamId: true,
+      },
+    }),
+  ]);
+
+  const seen = new Set<string>();
+  const results: {
+    id: string;
+    title: string;
+    emoji: string | null;
+    snippet: string;
+    parentId: string | null;
+    updatedAt: Date;
+    teamId: string | null;
+    rank: number;
+    matchedTitle: boolean;
+  }[] = [];
+
+  for (const n of titleHits) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    results.push({
+      id: n.id,
+      title: n.title,
+      emoji: n.emoji,
+      snippet: (n.contentText || "").slice(0, 160),
+      parentId: n.parentId,
+      updatedAt: n.updatedAt,
+      teamId: n.teamId,
+      rank: 1, // synthetic: title hits rank highest in ILIKE mode
+      matchedTitle: true,
+    });
+  }
+  for (const n of bodyHits) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    const lower = n.contentText.toLowerCase();
+    const idx = lower.indexOf(q.toLowerCase());
+    const start = Math.max(0, idx - 40);
+    const snippet =
+      idx >= 0
+        ? n.contentText.slice(start, start + 160)
+        : (n.contentText || "").slice(0, 160);
+    results.push({
+      id: n.id,
+      title: n.title,
+      emoji: n.emoji,
+      snippet,
+      parentId: n.parentId,
+      updatedAt: n.updatedAt,
+      teamId: n.teamId,
+      rank: 0.5, // synthetic: body hits rank below title hits
+      matchedTitle: false,
+    });
+  }
+  return results.slice(0, limit);
+}
+
 export const noteRouter = createTRPCRouter({
   list: noteProcedure
     .input(
@@ -239,28 +408,52 @@ export const noteRouter = createTRPCRouter({
   getById: noteProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const note = await ctx.prisma.note.findFirst({
-        where: { id: input.id, teamId: { in: ctx.teamspaceIds }, deletedAt: null },
-        include: {
-          tags: true,
-          author: { select: { name: true } },
-          team: { select: { id: true, name: true, kind: true } },
-          parent: { select: { id: true, title: true } },
-          children: {
-            where: { deletedAt: null },
-            orderBy: [{ position: "asc" }, { updatedAt: "desc" }],
-            select: {
-              id: true,
-              title: true,
-              emoji: true,
-              position: true,
-              isPinned: true,
-              updatedAt: true,
-            },
+      const noteInclude = {
+        tags: true,
+        author: { select: { name: true } },
+        team: { select: { id: true, name: true, kind: true } },
+        parent: { select: { id: true, title: true } },
+        children: {
+          where: { deletedAt: null },
+          orderBy: [
+            { position: "asc" as const },
+            { updatedAt: "desc" as const },
+          ],
+          select: {
+            id: true,
+            title: true,
+            emoji: true,
+            position: true,
+            isPinned: true,
+            updatedAt: true,
           },
-          linkedProject: { select: linkedProjectSelect },
         },
+        linkedProject: { select: linkedProjectSelect },
+      };
+
+      // Primary path: teamspace membership
+      let note = await ctx.prisma.note.findFirst({
+        where: { id: input.id, teamId: { in: ctx.teamspaceIds }, deletedAt: null },
+        include: noteInclude,
       });
+
+      // Fallback: share-based access (user may not be in the teamspace but
+      // has an explicit NoteShare granting at least viewer access)
+      if (!note) {
+        const shareAccess = await checkShareAccess(
+          ctx.prisma,
+          input.id,
+          ctx.userId,
+          ctx.teamspaceIds,
+        );
+        if (shareAccess.hasAccess) {
+          note = await ctx.prisma.note.findFirst({
+            where: { id: input.id, deletedAt: null },
+            include: noteInclude,
+          });
+        }
+      }
+
       if (!note) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
       }
@@ -279,10 +472,33 @@ export const noteRouter = createTRPCRouter({
   getAncestorChain: noteProcedure
     .input(z.object({ noteId: z.string() }))
     .query(async ({ ctx, input }) => {
-      // Guard: if user has no teamspaces, return empty chain
-      if (ctx.teamspaceIds.length === 0) return [];
+      // Guard: if user has no teamspaces, check share access as fallback
+      if (ctx.teamspaceIds.length === 0) {
+        const shareAccess = await checkShareAccess(
+          ctx.prisma,
+          input.noteId,
+          ctx.userId,
+          ctx.teamspaceIds,
+        );
+        if (!shareAccess.hasAccess) return [];
+        // For share-based access without teamspace membership, do a simpler
+        // iterative walk (CTE requires teamId IN list which is empty).
+        const chain: { id: string; title: string }[] = [];
+        let curId: string | null = input.noteId;
+        const LIMIT = 64;
+        while (curId && chain.length < LIMIT) {
+          const row: { id: string; title: string; parentId: string | null } | null = await ctx.prisma.note.findFirst({
+            where: { id: curId, deletedAt: null },
+            select: { id: true, title: true, parentId: true },
+          });
+          if (!row) break;
+          chain.unshift({ id: row.id, title: row.title });
+          curId = row.parentId;
+        }
+        return chain;
+      }
 
-      // Single recursive CTE query — walks the parent chain in one DB roundtrip
+      // Primary path: CTE with teamspace scoping
       const chain = await ctx.prisma.$queryRaw<
         { id: string; title: string; depth: number }[]
       >`
@@ -303,7 +519,34 @@ export const noteRouter = createTRPCRouter({
         SELECT id, title, depth FROM ancestors
         ORDER BY depth DESC
       `;
-      return chain.map(({ id, title }) => ({ id, title }));
+
+      if (chain.length > 0) {
+        return chain.map(({ id, title }) => ({ id, title }));
+      }
+
+      // Fallback: share-based access — CTE returned nothing, check if user
+      // has a share and walk the chain without teamspace scoping
+      const shareAccess = await checkShareAccess(
+        ctx.prisma,
+        input.noteId,
+        ctx.userId,
+        ctx.teamspaceIds,
+      );
+      if (!shareAccess.hasAccess) return [];
+
+      const fallbackChain: { id: string; title: string }[] = [];
+      let curId: string | null = input.noteId;
+      const LIMIT = 64;
+      while (curId && fallbackChain.length < LIMIT) {
+        const row: { id: string; title: string; parentId: string | null } | null = await ctx.prisma.note.findFirst({
+          where: { id: curId, deletedAt: null },
+          select: { id: true, title: true, parentId: true },
+        });
+        if (!row) break;
+        fallbackChain.unshift({ id: row.id, title: row.title });
+        curId = row.parentId;
+      }
+      return fallbackChain;
     }),
 
   /**
@@ -324,7 +567,17 @@ export const noteRouter = createTRPCRouter({
 
   /**
    * Search notes (title + body) for the global command palette.
-   * Title matches rank ahead of body matches; pagination via offset.
+   *
+   * Uses PostgreSQL full-text search (`tsvector` + `websearch_to_tsquery`) with
+   * weighted ranking: title matches (weight A) rank higher than body matches
+   * (weight B). The `search_vector` generated column and GIN index are created
+   * by migration `supabase/migrations/20260506_fulltext_search.sql`.
+   *
+   * Falls back to ILIKE substring matching for very short queries (1-2 chars)
+   * where tsvector tokenization produces no useful results.
+   *
+   * Returns `snippet` with `<mark>` tags around matched terms (via `ts_headline`),
+   * a numeric `rank` score, and backward-compatible `matchedTitle` boolean.
    */
   searchNotes: noteProcedure
     .input(
@@ -337,7 +590,7 @@ export const noteRouter = createTRPCRouter({
     .query(async ({ ctx, input }) => {
       const q = input.query.trim();
       if (!q) {
-        // Recent on empty query
+        // Empty query: return most recently updated notes.
         const rows = await ctx.prisma.note.findMany({
           where: { teamId: { in: ctx.teamspaceIds }, deletedAt: null },
           orderBy: { updatedAt: "desc" },
@@ -349,96 +602,92 @@ export const noteRouter = createTRPCRouter({
             contentText: true,
             parentId: true,
             updatedAt: true,
+            emoji: true,
+            teamId: true,
           },
         });
         return rows.map((n) => ({
           id: n.id,
           title: n.title,
+          emoji: n.emoji,
           snippet: (n.contentText || "").slice(0, 160),
           parentId: n.parentId,
           updatedAt: n.updatedAt,
+          teamId: n.teamId,
+          rank: 0,
           matchedTitle: false,
         }));
       }
 
-      // Title hits first, then body hits, dedup'd.
-      const [titleHits, bodyHits] = await Promise.all([
-        ctx.prisma.note.findMany({
-          where: {
-            teamId: { in: ctx.teamspaceIds },
-            deletedAt: null,
-            title: { contains: q, mode: "insensitive" },
-          },
-          orderBy: { updatedAt: "desc" },
-          take: input.limit,
-          select: {
-            id: true,
-            title: true,
-            contentText: true,
-            parentId: true,
-            updatedAt: true,
-          },
-        }),
-        ctx.prisma.note.findMany({
-          where: {
-            teamId: { in: ctx.teamspaceIds },
-            deletedAt: null,
-            contentText: { contains: q, mode: "insensitive" },
-          },
-          orderBy: { updatedAt: "desc" },
-          take: input.limit,
-          select: {
-            id: true,
-            title: true,
-            contentText: true,
-            parentId: true,
-            updatedAt: true,
-          },
-        }),
-      ]);
+      // Short queries (1-2 chars): tsvector tokenization won't help -- fall
+      // back to the original ILIKE approach for substring matching.
+      if (q.length <= 2) {
+        return searchNotesIlike(ctx, q, input.limit, input.offset);
+      }
 
-      const seen = new Set<string>();
-      const results: {
+      // Full-text search via the generated `search_vector` column + GIN index.
+      // `websearch_to_tsquery` supports quoted phrases, OR, - (NOT) out of the
+      // box and never raises a syntax error on user input (unlike plainto_ or
+      // raw to_tsquery).
+      if (ctx.teamspaceIds.length === 0) return [];
+
+      type FtsRow = {
         id: string;
         title: string;
-        snippet: string;
+        emoji: string | null;
+        contentText: string;
         parentId: string | null;
         updatedAt: Date;
-        matchedTitle: boolean;
-      }[] = [];
-      for (const n of titleHits) {
-        if (seen.has(n.id)) continue;
-        seen.add(n.id);
-        results.push({
-          id: n.id,
-          title: n.title,
-          snippet: (n.contentText || "").slice(0, 160),
-          parentId: n.parentId,
-          updatedAt: n.updatedAt,
-          matchedTitle: true,
-        });
+        teamId: string | null;
+        rank: number;
+        snippet: string;
+      };
+
+      const rows = await ctx.prisma.$queryRaw<FtsRow[]>`
+        SELECT
+          n.id,
+          n.title,
+          n.emoji,
+          n."contentText",
+          n."parentId",
+          n."updatedAt",
+          n."teamId",
+          ts_rank(n.search_vector, query) AS rank,
+          ts_headline(
+            'english',
+            n."contentText",
+            query,
+            'MaxWords=30, MinWords=15, StartSel=<mark>, StopSel=</mark>'
+          ) AS snippet
+        FROM notes n, websearch_to_tsquery('english', ${q}) query
+        WHERE n.search_vector @@ query
+          AND n."teamId" IN (${Prisma.join(ctx.teamspaceIds)})
+          AND n."deletedAt" IS NULL
+        ORDER BY rank DESC
+        LIMIT ${input.limit}
+        OFFSET ${input.offset}
+      `;
+
+      // If full-text search returns nothing (e.g. all stop-words, or the
+      // query term isn't in the English dictionary), fall back to ILIKE so
+      // exact substring matches still surface.
+      if (rows.length === 0) {
+        return searchNotesIlike(ctx, q, input.limit, input.offset);
       }
-      for (const n of bodyHits) {
-        if (seen.has(n.id)) continue;
-        seen.add(n.id);
-        // Pull a short snippet around the match.
-        const lower = n.contentText.toLowerCase();
-        const idx = lower.indexOf(q.toLowerCase());
-        const start = Math.max(0, idx - 40);
-        const snippet =
-          idx >= 0
-            ? n.contentText.slice(start, start + 160)
-            : (n.contentText || "").slice(0, 160);
-        results.push({
-          id: n.id,
-          title: n.title,
-          snippet,
-          parentId: n.parentId,
-          updatedAt: n.updatedAt,
-          matchedTitle: false,
-        });
-      }
-      return results.slice(0, input.limit);
+
+      return rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        emoji: r.emoji,
+        snippet: r.snippet,
+        parentId: r.parentId,
+        updatedAt: r.updatedAt,
+        teamId: r.teamId,
+        rank: Number(r.rank),
+        // Title match heuristic: rank > 0.1 almost always means the 'A' weight
+        // (title) contributed. Not perfect but good enough for UI hints.
+        matchedTitle: Number(r.rank) > 0.1,
+      }));
     }),
 
   /**
@@ -792,9 +1041,26 @@ export const noteRouter = createTRPCRouter({
   update: noteMutationProcedure.input(updateNoteSchema).mutation(async ({ ctx, input }) => {
     const { id, tags, ...data } = input;
 
-    const existing = await ctx.prisma.note.findFirst({
+    // Primary path: teamspace membership
+    let existing = await ctx.prisma.note.findFirst({
       where: { id, teamId: { in: ctx.teamspaceIds } },
     });
+
+    // Fallback: share-based editor access
+    if (!existing) {
+      const shareAccess = await checkShareAccess(
+        ctx.prisma,
+        id,
+        ctx.userId,
+        ctx.teamspaceIds,
+      );
+      if (shareAccess.hasAccess && shareAccess.role === "editor") {
+        existing = await ctx.prisma.note.findFirst({
+          where: { id, deletedAt: null },
+        });
+      }
+    }
+
     if (!existing) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
     }
@@ -1052,10 +1318,25 @@ export const noteRouter = createTRPCRouter({
       }),
     )
     .query(async ({ ctx, input }) => {
-      const note = await ctx.prisma.note.findFirst({
+      let note = await ctx.prisma.note.findFirst({
         where: { id: input.noteId, teamId: { in: ctx.teamspaceIds } },
         select: { id: true },
       });
+      // Fallback: share-based access
+      if (!note) {
+        const shareAccess = await checkShareAccess(
+          ctx.prisma,
+          input.noteId,
+          ctx.userId,
+          ctx.teamspaceIds,
+        );
+        if (shareAccess.hasAccess) {
+          note = await ctx.prisma.note.findFirst({
+            where: { id: input.noteId, deletedAt: null },
+            select: { id: true },
+          });
+        }
+      }
       if (!note) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
       }
@@ -1181,5 +1462,147 @@ export const noteRouter = createTRPCRouter({
       });
 
       return updated;
+    }),
+
+  /**
+   * Pinned notes across all the user's teamspaces. Used by the sidebar
+   * "Favorites" section. Light query — returns only the fields needed
+   * for a link row (id, title, emoji, parentId).
+   */
+  listPinned: noteProcedure.query(async ({ ctx }) => {
+    return ctx.prisma.note.findMany({
+      where: {
+        teamId: { in: ctx.teamspaceIds },
+        deletedAt: null,
+        isPinned: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 10,
+      select: {
+        id: true,
+        title: true,
+        emoji: true,
+        parentId: true,
+      },
+    });
+  }),
+
+  listFiltered: noteProcedure
+    .input(
+      z.object({
+        filter: z.object({
+          conditions: z
+            .array(
+              z.object({
+                field: z.enum([
+                  "title",
+                  "tag",
+                  "teamId",
+                  "authorId",
+                  "createdAt",
+                  "updatedAt",
+                  "isPinned",
+                  "hasChildren",
+                  "linkedProjectId",
+                ]),
+                operator: z.enum([
+                  "equals",
+                  "notEquals",
+                  "contains",
+                  "before",
+                  "after",
+                  "isSet",
+                  "isNotSet",
+                ]),
+                value: z
+                  .union([z.string(), z.boolean(), z.number()])
+                  .optional(),
+              }),
+            )
+            .max(10),
+          combinator: z.enum(["and", "or"]).default("and"),
+        }),
+        take: z.number().int().min(1).max(200).default(50),
+        skip: z.number().int().min(0).default(0),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { filter, take, skip } = input;
+
+      const prismaConditions = filter.conditions.map((c) => {
+        switch (c.field) {
+          case "title":
+            if (c.operator === "contains")
+              return { title: { contains: String(c.value), mode: "insensitive" as const } };
+            if (c.operator === "equals") return { title: String(c.value) };
+            if (c.operator === "notEquals") return { NOT: { title: String(c.value) } };
+            return {};
+          case "tag":
+            if (c.operator === "equals")
+              return { tags: { some: { name: String(c.value) } } };
+            if (c.operator === "notEquals")
+              return { tags: { none: { name: String(c.value) } } };
+            return {};
+          case "teamId":
+            if (c.operator === "equals") return { teamId: String(c.value) };
+            return {};
+          case "authorId":
+            if (c.operator === "equals") return { authorId: String(c.value) };
+            return {};
+          case "createdAt":
+            if (c.operator === "before")
+              return { createdAt: { lt: new Date(String(c.value)) } };
+            if (c.operator === "after")
+              return { createdAt: { gt: new Date(String(c.value)) } };
+            return {};
+          case "updatedAt":
+            if (c.operator === "before")
+              return { updatedAt: { lt: new Date(String(c.value)) } };
+            if (c.operator === "after")
+              return { updatedAt: { gt: new Date(String(c.value)) } };
+            return {};
+          case "isPinned":
+            if (c.operator === "equals") return { isPinned: Boolean(c.value) };
+            return {};
+          case "hasChildren":
+            if (c.operator === "equals" && c.value === true)
+              return { children: { some: {} } };
+            if (c.operator === "equals" && c.value === false)
+              return { children: { none: {} } };
+            return {};
+          case "linkedProjectId":
+            if (c.operator === "isSet")
+              return { linkedProjectId: { not: null } };
+            if (c.operator === "isNotSet")
+              return { linkedProjectId: null };
+            if (c.operator === "equals")
+              return { linkedProjectId: String(c.value) };
+            return {};
+          default:
+            return {};
+        }
+      });
+
+      const where = {
+        teamId: { in: ctx.teamspaceIds },
+        deletedAt: null,
+        ...(filter.combinator === "or"
+          ? { OR: prismaConditions }
+          : { AND: prismaConditions }),
+      };
+
+      return ctx.prisma.note.findMany({
+        where,
+        select: {
+          ...noteListSelect,
+          _count: { select: { children: true } },
+        },
+        orderBy: [
+          { isPinned: "desc" },
+          { updatedAt: "desc" },
+        ],
+        take,
+        skip,
+      });
     }),
 });

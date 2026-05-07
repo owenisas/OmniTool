@@ -3,6 +3,9 @@ import { taskListBlockSpec } from "./task-list-block";
 import { projectCardBlockSpec } from "./project-card-block";
 import { dailySummaryBlockSpec } from "./daily-summary-block";
 import { noteEmbedBlockSpec } from "./note-embed-block";
+import { toggleBlockSpec } from "./toggle-block";
+import { calloutBlockSpec } from "./callout-block";
+import { bookmarkBlockSpec } from "./bookmark-block";
 import { personInlineSpec } from "./person-chip";
 import { noteMentionInlineSpec } from "./note-mention-chip";
 
@@ -19,6 +22,9 @@ export const noteSchema = BlockNoteSchema.create({
     projectCard: projectCardBlockSpec(),
     dailySummary: dailySummaryBlockSpec(),
     noteEmbed: noteEmbedBlockSpec(),
+    toggle: toggleBlockSpec(),
+    callout: calloutBlockSpec(),
+    bookmark: bookmarkBlockSpec(),
   },
   inlineContentSpecs: {
     ...defaultInlineContentSpecs,

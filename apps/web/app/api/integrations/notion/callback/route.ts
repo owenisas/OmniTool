@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { encrypt } from "@omnitool/integrations";
 import { prisma } from "@omnitool/database";
 import { isDesktopOAuthState, verifyDesktopOAuthState } from "@/lib/oauth-state";
+import { desktopOAuthCompletePage } from "@/lib/oauth-complete-page";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -71,13 +72,16 @@ export async function GET(request: NextRequest) {
 
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
-      console.error("[notion-oauth] Token error:", tokenData.error);
+      const reason = `${tokenData.error}${
+        tokenData.error_description ? `: ${tokenData.error_description}` : ""
+      }`;
+      console.error("[notion-oauth] Token error:", reason);
       if (isDesktop) {
-        return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=error");
+        return desktopOAuthCompletePage("notion", "error", reason);
       }
       return NextResponse.redirect(
         new URL(
-          "/settings/integrations?error=token_exchange",
+          `/settings/integrations?error=${encodeURIComponent(reason)}`,
           process.env.AUTH_URL
         )
       );
@@ -130,10 +134,10 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Desktop flow: redirect to deep link so focus returns to the app.
+    // Desktop flow: show page with deep link + manual "Open" button.
     // Web flow: redirect to integrations page.
     if (isDesktop) {
-      return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=success");
+      return desktopOAuthCompletePage("notion", "success");
     }
 
     const response = NextResponse.redirect(
@@ -143,13 +147,14 @@ export async function GET(request: NextRequest) {
     response.cookies.delete("notion-oauth-state");
     return response;
   } catch (error) {
-    console.error("[notion-oauth] Callback error:", error);
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("[notion-oauth] Callback error:", reason);
     if (isDesktop) {
-      return NextResponse.redirect("omnitool://oauth-complete?provider=notion&status=error");
+      return desktopOAuthCompletePage("notion", "error", reason);
     }
     return NextResponse.redirect(
       new URL(
-        "/settings/integrations?error=callback_failed",
+        `/settings/integrations?error=${encodeURIComponent(reason)}`,
         process.env.AUTH_URL
       )
     );

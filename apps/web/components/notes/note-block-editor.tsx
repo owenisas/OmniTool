@@ -32,6 +32,7 @@ import { getNotesSlashItems } from "./ai/slash-items";
 import { InlineAIPrompt } from "./ai/inline-ai-prompt";
 import { AskAIToolbarButton } from "./ai/ask-ai-toolbar-button";
 import { noteSchema } from "./blocks/schema";
+import { uploadAttachment } from "@/lib/notes/upload-attachment";
 import { EmbedPicker, type EmbedInsertEvent } from "./blocks/embed-picker";
 import { LinkedEntityPill } from "./linked-entity-pill";
 import { NoteHistorySheet } from "./note-history-sheet";
@@ -118,6 +119,7 @@ export function NoteBlockEditor({
     {
       schema: noteSchema,
       initialContent: normalizeStoredBlocks(note.blocks),
+      uploadFile: uploadAttachment,
     },
     [note.id],
   );

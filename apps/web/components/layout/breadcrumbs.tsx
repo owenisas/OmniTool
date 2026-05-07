@@ -40,6 +40,7 @@ const LABELS: Record<string, string> = {
   security: "Security",
   team: "Team",
   new: "New",
+  workflows: "Workflows",
 };
 
 function looksLikeId(segment: string): boolean {

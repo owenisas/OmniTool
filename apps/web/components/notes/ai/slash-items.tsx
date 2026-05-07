@@ -11,9 +11,12 @@ import type {
   StyleSchema,
 } from "@blocknote/core";
 import {
+  AlertCircle,
   AtSign,
+  ChevronRight,
   FilePlus2,
   FolderKanban,
+  Globe,
   Hash,
   ListTodo,
   Sparkles,
@@ -156,6 +159,51 @@ export function getNotesSlashItems<
       group: "Embed",
       subtext: "Tag a teammate inline",
       icon: <AtSign className="h-4 w-4" />,
+    },
+    {
+      title: "Toggle",
+      onItemClick: () => {
+        const pos = editor.getTextCursorPosition();
+        editor.insertBlocks(
+          [{ type: "toggle" as any }],
+          pos.block,
+          "after",
+        );
+      },
+      aliases: ["toggle", "collapse", "expand", "details"],
+      group: "Basic blocks",
+      subtext: "Collapsible toggle section",
+      icon: <ChevronRight className="h-4 w-4" />,
+    },
+    {
+      title: "Callout",
+      onItemClick: () => {
+        const pos = editor.getTextCursorPosition();
+        editor.insertBlocks(
+          [{ type: "callout" as any }],
+          pos.block,
+          "after",
+        );
+      },
+      aliases: ["callout", "highlight", "info", "warning", "tip"],
+      group: "Basic blocks",
+      subtext: "Highlighted callout box with icon",
+      icon: <AlertCircle className="h-4 w-4" />,
+    },
+    {
+      title: "Bookmark",
+      onItemClick: () => {
+        const pos = editor.getTextCursorPosition();
+        editor.insertBlocks(
+          [{ type: "bookmark" as any }],
+          pos.block,
+          "after",
+        );
+      },
+      aliases: ["bookmark", "url", "link", "web", "clip"],
+      group: "Basic blocks",
+      subtext: "Save a link with preview card",
+      icon: <Globe className="h-4 w-4" />,
     },
     ...getDefaultReactSlashMenuItems(editor),
   ];

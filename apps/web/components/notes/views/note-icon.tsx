@@ -1,13 +1,12 @@
 "use client";
 
-import { avatarColorClass, avatarLetter } from "@/lib/notes/avatar-color";
 import { cn } from "@/lib/utils";
 
 interface NoteIconProps {
   emoji: string | null | undefined;
-  /** Used for the deterministic letter-avatar fallback. */
-  id: string;
-  title: string;
+  /** Kept for API compatibility with prior letter-avatar fallback. */
+  id?: string;
+  title?: string;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
   className?: string;
 }
@@ -21,41 +20,21 @@ const SIZE_CLASSES: Record<NonNullable<NoteIconProps["size"]>, string> = {
 };
 
 /**
- * Square icon for a note. Renders the emoji if present, otherwise a colored
- * letter-avatar derived deterministically from the note id.
+ * Square icon for a note. Renders the emoji if present; otherwise renders
+ * nothing so list/card layouts collapse the icon column for emoji-less notes.
  */
-export function NoteIcon({
-  emoji,
-  id,
-  title,
-  size = "md",
-  className,
-}: NoteIconProps) {
-  if (emoji) {
-    return (
-      <span
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center rounded-md leading-none",
-          SIZE_CLASSES[size],
-          className,
-        )}
-        aria-hidden
-      >
-        {emoji}
-      </span>
-    );
-  }
+export function NoteIcon({ emoji, size = "md", className }: NoteIconProps) {
+  if (!emoji) return null;
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-md font-semibold",
+        "inline-flex shrink-0 items-center justify-center rounded-md leading-none",
         SIZE_CLASSES[size],
-        avatarColorClass(id),
         className,
       )}
       aria-hidden
     >
-      {avatarLetter(title)}
+      {emoji}
     </span>
   );
 }

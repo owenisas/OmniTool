@@ -13,6 +13,16 @@ export function isTauri(): boolean {
 }
 
 /**
+ * Detect if we're running on the desktop sidecar (localhost:19283),
+ * even if Tauri internals haven't injected yet.
+ * Prevents the web fallback from navigating the webview away.
+ */
+export function isDesktopOrigin(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.port === "19283";
+}
+
+/**
  * Send a native notification (falls back to web Notification API).
  */
 export async function nativeNotify(title: string, body: string): Promise<void> {
@@ -92,14 +102,15 @@ export async function openInBrowser(url: string): Promise<void> {
  *
  * - **Web**: navigates the current tab to the local authorize route, which
  *   302s to the provider. Standard browser flow.
- * - **Desktop (Tauri)**: fetches the authorize route (server returns
- *   `{ url }` JSON for desktop), then opens that URL in the system browser
- *   via the shell plugin. The webview stays put — no navigation, no
- *   stuck-on-blank-page state. The provider's callback eventually fires
- *   `omnitool://oauth-complete?...` which the deep-link handlers pick up.
+ * - **Desktop (Tauri / sidecar)**: fetches the authorize route (server
+ *   returns `{ url }` JSON for desktop), then opens that URL in the system
+ *   browser. The webview stays put — no navigation, no blank-page state.
+ *
+ * Uses `isTauri() || isDesktopOrigin()` so the webview is NEVER navigated
+ * away on desktop, even if `__TAURI_INTERNALS__` hasn't injected yet.
  */
 export async function startOAuthFlow(authorizeUrl: string): Promise<void> {
-  if (isTauri()) {
+  if (isTauri() || isDesktopOrigin()) {
     const res = await fetch(authorizeUrl, { credentials: "include" });
     if (!res.ok) {
       throw new Error(

@@ -6,6 +6,7 @@
   "build": {
     "beforeDevCommand": "",
     "beforeBuildCommand": "node ../../scripts/desktop-before-build.mjs",
+    "beforeBundleCommand": "bash ../../scripts/sign-native-deps.sh",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../app-shell"
   },

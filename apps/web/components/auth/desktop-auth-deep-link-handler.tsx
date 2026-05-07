@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getCurrentDeepLinks, isTauri, onDeepLink } from "@/lib/tauri";
 
@@ -27,6 +28,7 @@ function getSafeNext(value: string | null): string {
  */
 export function DesktopAuthDeepLinkHandler() {
   const handledUrlsRef = useRef(new Set<string>());
+  const router = useRouter();
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -84,7 +86,11 @@ export function DesktopAuthDeepLinkHandler() {
             status === "success"
               ? `/settings/integrations?connected=${provider}`
               : `/settings/integrations?error=${provider}_oauth`;
-          window.location.href = target;
+          // Soft nav — `router.replace` keeps the React tree mounted, so
+          // the integrations page's local listener picks up the new query
+          // params without a full reload (which would blank the screen
+          // and trigger the page-transition fade = visible flash).
+          router.replace(target);
           continue;
         }
       }

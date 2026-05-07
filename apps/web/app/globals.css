@@ -77,3 +77,99 @@
   background-color: transparent !important;
   border-radius: 0 !important;
 }
+
+/* ─── BlockNote multimedia blocks (Notion-aligned polish) ───────────────
+ * BlockNote's defaults are functional but boxy. Soften the media blocks
+ * (image / video / audio / file) so they read as inline prose ornaments
+ * rather than dialog panels — matches Notion's quiet aesthetic.
+ */
+
+/* Filled image / video — soft rounding, hairline border, centered, capped
+ * to the prose column width. Lets a vertical phone shot still breathe
+ * without stretching to full editor width. */
+.bn-editor .bn-visual-media-wrapper img,
+.bn-editor .bn-visual-media-wrapper video {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);
+  max-width: 100%;
+  height: auto;
+}
+.dark .bn-editor .bn-visual-media-wrapper img,
+.dark .bn-editor .bn-visual-media-wrapper video {
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 8%);
+}
+
+/* Audio — full-width, rounded native controls. */
+.bn-editor .bn-visual-media-wrapper audio {
+  width: 100%;
+  border-radius: 8px;
+}
+
+/* Captions — muted italic, sits quietly under the media (Notion style). */
+.bn-editor .bn-file-caption,
+.bn-editor [data-file-caption] {
+  font-style: italic;
+  font-size: 0.8125rem;
+  color: hsl(var(--muted-foreground));
+  margin-top: 6px;
+}
+
+/* Empty-state placeholder for media blocks — a single muted dashed row
+ * instead of a chunky filled button. Mirrors the noteEmbed picker. */
+.bn-editor .bn-add-file-button {
+  background: transparent !important;
+  border: 1px dashed hsl(var(--border)) !important;
+  border-radius: 6px !important;
+  padding: 10px 12px !important;
+  color: hsl(var(--muted-foreground)) !important;
+  font-size: 0.8125rem !important;
+  font-weight: 400 !important;
+  box-shadow: none !important;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.bn-editor .bn-add-file-button:hover {
+  background: hsl(var(--accent) / 0.4) !important;
+  border-color: hsl(var(--muted-foreground) / 0.5) !important;
+}
+.bn-editor .bn-add-file-button-icon {
+  color: hsl(var(--muted-foreground)) !important;
+  opacity: 0.7;
+}
+
+/* Filled file chip — match shadcn card surface: rounded, hairline border,
+ * subtle hover. Tones down the default download button so the chip reads
+ * as a single interactive row. */
+.bn-editor [data-content-type="file"] .bn-file-block-content-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.bn-editor [data-content-type="file"] .bn-file-block-content-wrapper:hover {
+  background: hsl(var(--accent) / 0.4);
+  border-color: hsl(var(--muted-foreground) / 0.4);
+}
+.bn-editor [data-content-type="file"] .bn-file-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+
+/* Resize handles — keep them functional but visually quieter. The default
+ * BlockNote handles are highlighted blue dots; soften to a small gray pill
+ * that only fully appears on hover. */
+.bn-editor .bn-visual-media-wrapper .bn-resize-handle {
+  background: hsl(var(--muted-foreground) / 0.4) !important;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+.bn-editor .bn-visual-media-wrapper:hover .bn-resize-handle {
+  opacity: 1;
+}
+.bn-editor .bn-visual-media-wrapper .bn-resize-handle:hover {
+  background: hsl(var(--muted-foreground) / 0.7) !important;
+}

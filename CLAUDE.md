@@ -36,6 +36,8 @@ supabase/                 # Supabase config.toml + migrations (managed via `supa
 
 When the user says "run" or "run the app", always run `pnpm build:desktop` (production desktop build). This builds the standalone Next.js server, bundles it with the Node.js sidecar, and produces the distributable app. Dev mode (`pnpm dev:desktop`) is too slow for testing — it compiles on-demand via Turbopack. Always use the production build to confirm the real user experience.
 
+**Always prioritize desktop**: The desktop app bundles a local Next.js sidecar at `localhost:19283` that serves all API routes, tRPC, and OAuth callbacks. Changes to server-side code (middleware, API routes, callbacks) only take effect on the desktop when a **new DMG is built and installed** — deploying to Vercel alone does NOT fix desktop issues. When making changes, always rebuild the desktop DMG first, then deploy to Vercel as a secondary step.
+
 ### `pnpm ship:desktop` — full rebuild + reinstall + relaunch
 
 The `ship:desktop` script (in root `package.json`) chains build → mount DMG → replace `/Applications/OmniTool.app` → launch. Use this whenever you need to verify changes in the installed desktop binary.
@@ -74,18 +76,38 @@ pnpm db:studio      # Open Prisma Studio
 pnpm typecheck      # Type-check all packages
 ```
 
+## Code Signing & Notarization (macOS)
+
+- **Certificate**: `Developer ID Application: Tsz To Suen (3LHSL95J9H)` in login Keychain
+- **Team ID**: `3LHSL95J9H`
+- **Apple ID**: `thomas.suen1234@icloud.com`
+- **Credentials**: `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` in `.env.deploy.local`
+- **Entitlements**: `apps/desktop/src-tauri/Entitlements.plist` — JIT, unsigned memory, dyld env vars, disable library validation (needed for Node.js sidecar)
+- **Pre-bundle signing**: `scripts/sign-native-deps.sh` runs as `beforeBundleCommand` in `tauri.conf.json`. Signs all `.dylib`, `.node`, `.so` files + `NodeSidecar.app` with Developer ID cert + hardened runtime + secure timestamp. Without this, Apple notarization rejects the embedded sharp/Prisma/Node binaries.
+- **Post-build notarization**: `scripts/notarize-dmg.sh` — Tauri's DMG bundler loses code signatures during copy, so this script extracts the `.app` from the DMG, re-signs everything properly (native deps → NodeSidecar → outer app), rebuilds a clean DMG, signs it, submits to `xcrun notarytool`, and staples the ticket. **Do NOT rely on Tauri's built-in notarization** — it creates a zip with `__MACOSX` metadata that Apple rejects.
+- **Build + sign + notarize flow**:
+  ```bash
+  source .env.deploy.local && export APPLE_SIGNING_IDENTITY
+  pnpm build:desktop                      # builds + signs (no notarization)
+  export APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+  ./scripts/notarize-dmg.sh               # re-sign, notarize, staple
+  ```
+- **Private key**: `DevIDApplication.key` on Desktop — already imported into Keychain, can be deleted or moved to safe storage.
+
 ## Deployment
 
 - **Production**: Vercel, project `omnitool`, team `thomassuent-5734s-projects`
-- **Credentials**: `.env.deploy.local` (Vercel token, project/team IDs, Upstash keys)
+- **Credentials**: `.env.deploy.local` (Vercel token, project/team IDs, Upstash keys, Apple signing keys)
 - **Deploy command** (must use `--cwd` to monorepo root):
   ```bash
   VERCEL_ORG_ID=$VERCEL_TEAM_ID VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID \
     vercel deploy --prod --archive=tgz --token $VERCEL_TOKEN \
     --cwd /path/to/OmniTool
   ```
+- **Git author restriction**: Vercel team policy requires the git commit author to be a team member. If deploying from a machine where `git config user.email` isn't on the team, create a temp repo with the correct author (see deploy workaround used for `reunifylabs@gmail.com`).
 - **Vercel project root directory**: `apps/web` (set in Vercel dashboard)
 - **Build config**: `apps/web/vercel.json` — custom `buildCommand` runs from monorepo root via `cd ../..`
+- **Cron limitation**: Vercel Hobby plan allows max 1 cron job per day. `handoff-poll` is set to `0 8 * * *` (daily 8am UTC). Upgrade to Pro to restore `*/5 * * * *`.
 - **Supabase config push**: `supabase config push --project-ref irtrdplptcxvdbzabjri` (auth settings, redirect URLs)
 
 ## Auth (Supabase)
@@ -118,6 +140,9 @@ pnpm typecheck      # Type-check all packages
 - **Token storage**: `ConnectedAccount` model — AES-256-GCM encrypted tokens (`packages/integrations/src/lib/encryption.ts`), key from `INTEGRATION_ENCRYPTION_KEY`
 - **Token refresh**: `packages/integrations/src/lib/token-refresh.ts` — implemented for GitHub (App tokens) and Linear; mutex lock prevents concurrent refreshes
 - **Callback security**: CSRF state verification, session re-validation, `redirect_uri` passed in code exchange, rate limiting (10 req/min per IP)
+- **Desktop OAuth flow**: System browser handles the OAuth dance (Tauri webview stays put). Callback routes detect desktop via `isDesktopOAuthState(state)` — the state param embeds `desktop:{nonce}:{userId}:{HMAC}` so no session cookies are needed. State signing/verification in `apps/web/lib/oauth-state.ts`.
+- **Desktop callback completion page**: Instead of raw `omnitool://` redirects (which browsers often block), desktop callbacks return an HTML page (`apps/web/lib/oauth-complete-page.ts`) that auto-attempts the deep link + shows a manual "Open OmniTool" button as fallback. This page also shows connection status (success/error).
+- **Middleware whitelist**: OAuth callback routes (`/api/integrations/github/callback`, `/api/integrations/notion/callback`) are whitelisted in `apps/web/lib/supabase/middleware.ts` as public routes — the system browser has no session cookies, so middleware must not redirect these to `/login`. The callback routes handle their own auth (HMAC for desktop, session+CSRF for web).
 
 ## Settings
 

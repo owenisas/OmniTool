@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  Image as ImageIcon,
-  LayoutGrid,
-  List as ListIcon,
-  Network,
-} from "lucide-react";
+import { Calendar, Clock, Filter, LayoutGrid, List as ListIcon, Network } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -28,6 +23,8 @@ interface NotesViewControlsProps {
   onViewModeChange: (next: ViewMode) => void;
   onSortByChange: (next: SortBy) => void;
   onGroupByChange: (next: GroupBy) => void;
+  filterActive?: boolean;
+  onToggleFilter?: () => void;
 }
 
 const VIEW_MODE_BUTTONS: {
@@ -37,8 +34,9 @@ const VIEW_MODE_BUTTONS: {
 }[] = [
   { value: "cards", label: "Cards", icon: LayoutGrid },
   { value: "list", label: "List", icon: ListIcon },
-  { value: "gallery", label: "Gallery", icon: ImageIcon },
   { value: "tree", label: "Tree", icon: Network },
+  { value: "calendar", label: "Calendar", icon: Calendar },
+  { value: "timeline", label: "Timeline", icon: Clock },
 ];
 
 const SORT_OPTIONS: { value: SortBy; label: string }[] = [
@@ -65,8 +63,11 @@ export function NotesViewControls({
   onViewModeChange,
   onSortByChange,
   onGroupByChange,
+  filterActive,
+  onToggleFilter,
 }: NotesViewControlsProps) {
-  const isTreeView = viewMode === "tree";
+  const disableSortGroup =
+    viewMode === "tree" || viewMode === "calendar" || viewMode === "timeline";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -101,10 +102,28 @@ export function NotesViewControls({
       </div>
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
+        {onToggleFilter && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn(
+              "h-8 text-xs",
+              filterActive && "border-primary text-primary",
+            )}
+            onClick={onToggleFilter}
+            aria-pressed={filterActive}
+            title="Toggle filters"
+          >
+            <Filter className="mr-1 h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Filter</span>
+          </Button>
+        )}
+
         <Select
           value={sortBy}
           onValueChange={(v) => onSortByChange(v as SortBy)}
-          disabled={isTreeView}
+          disabled={disableSortGroup}
         >
           <SelectTrigger
             className="h-8 w-[160px] text-xs"
@@ -124,7 +143,7 @@ export function NotesViewControls({
         <Select
           value={groupBy}
           onValueChange={(v) => onGroupByChange(v as GroupBy)}
-          disabled={isTreeView}
+          disabled={disableSortGroup}
         >
           <SelectTrigger
             className="h-8 w-[150px] text-xs"

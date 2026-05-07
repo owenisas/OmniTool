@@ -17,7 +17,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox as InboxIcon,
+  Star,
   Users,
+  Workflow,
 } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import {
@@ -59,6 +61,7 @@ const navSections: NavSection[] = [
       { name: "Issues", href: "/issues", icon: Bug },
       { name: "Notes", href: "/notes", icon: StickyNote },
       { name: "AI Agents", href: "/agents", icon: Bot },
+      { name: "Workflows", href: "/workflows", icon: Workflow },
       { name: "Performance", href: "/performance", icon: BarChart3 },
       { name: "Team Activity", href: "/team-activity", icon: Users },
     ],
@@ -350,16 +353,19 @@ export function Sidebar() {
                   ))}
                 </div>
                 {section.label === "Workspace" && (
-                  <div
-                    className={cn(
-                      "mt-1 overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out",
-                      collapsed
-                        ? "pointer-events-none max-h-0 opacity-0"
-                        : "max-h-[40vh] opacity-100",
-                    )}
-                  >
-                    <SidebarNoteTree collapsed={collapsed} />
-                  </div>
+                  <>
+                    <SidebarFavorites collapsed={collapsed} />
+                    <div
+                      className={cn(
+                        "mt-1 overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out",
+                        collapsed
+                          ? "pointer-events-none max-h-0 opacity-0"
+                          : "max-h-[40vh] opacity-100",
+                      )}
+                    >
+                      <SidebarNoteTree collapsed={collapsed} />
+                    </div>
+                  </>
                 )}
               </div>
             ))}
@@ -384,5 +390,64 @@ export function Sidebar() {
         </TooltipProvider>
       </div>
     </aside>
+  );
+}
+
+// ─── Favorites Section ─────────────────────────────────────
+
+function SidebarFavorites({ collapsed }: { collapsed: boolean }) {
+  const pathname = usePathname();
+  const { data: pinned } = trpc.note.listPinned.useQuery(undefined, {
+    staleTime: 30_000,
+  });
+
+  if (collapsed || !pinned || pinned.length === 0) return null;
+
+  return (
+    <div
+      className={cn(
+        "mt-1 overflow-hidden transition-[max-height,opacity] duration-300 ease-in-out",
+        "max-h-[30vh] opacity-100",
+      )}
+    >
+      <div className="space-y-1 px-1">
+        <div className="flex items-center gap-1.5 px-2">
+          <Star className="h-3 w-3 text-amber-500" />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            Favorites
+          </span>
+        </div>
+        <ul className="space-y-0.5">
+          {pinned.map((note) => {
+            const isActive =
+              pathname === `/notes/${note.id}`;
+            return (
+              <li key={note.id}>
+                <Link
+                  href={`/notes/${note.id}`}
+                  prefetch={false}
+                  className={cn(
+                    "flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs",
+                    isActive
+                      ? "bg-accent font-medium text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/60",
+                  )}
+                  title={note.title || "Untitled"}
+                >
+                  {note.emoji ? (
+                    <span className="shrink-0 text-xs leading-none" aria-hidden>
+                      {note.emoji}
+                    </span>
+                  ) : (
+                    <StickyNote className="h-3 w-3 shrink-0 opacity-60" />
+                  )}
+                  <span className="truncate">{note.title || "Untitled"}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
   );
 }

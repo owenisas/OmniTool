@@ -26,5 +26,22 @@ export {
   listNotionPages,
   getNotionParentPageId,
 } from "./providers/notion";
-export { createSlackClient } from "./providers/slack";
-export { createLinearClient } from "./providers/linear";
+export {
+  createSlackClient,
+  sendSlackMessage,
+  sendBlockKitMessage,
+  listSlackChannels,
+  getSlackTeamInfo,
+  openSlackDM,
+  verifySlackRequest,
+} from "./providers/slack";
+export {
+  createLinearClient,
+  getLinearIssues,
+  listLinearTeams,
+  listLinearProjects,
+  createLinearIssue,
+  updateLinearIssue,
+  getLinearIssue,
+  verifyLinearWebhook,
+} from "./providers/linear";

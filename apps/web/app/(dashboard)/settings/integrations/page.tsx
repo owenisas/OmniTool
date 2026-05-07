@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "@/trpc/client";
 import { Card, CardContent } from "@omnitool/ui/components/card";
 import { Button } from "@omnitool/ui/components/button";
@@ -13,12 +13,8 @@ import {
   SlackIcon,
   LinearIcon,
 } from "@/components/icons/brand-icons";
-import {
-  startOAuthFlow,
-  getCurrentDeepLinks,
-  onDeepLink,
-  isTauri,
-} from "@/lib/tauri";
+import { startOAuthFlow } from "@/lib/tauri";
+import { toast } from "sonner";
 import { GitHubImportDialog } from "@/components/integrations/github-import-dialog";
 import { NotionImportDialog } from "@/components/integrations/notion-import-dialog";
 import { runBackgroundTask } from "@/lib/background-tasks/run";
@@ -54,21 +50,20 @@ const integrations: IntegrationDef[] = [
     provider: "SLACK",
     name: "Slack",
     description: "Notifications and task hooks",
-    available: false,
+    available: true,
     icon: SlackIcon,
   },
   {
     key: "linear",
     provider: "LINEAR",
     name: "Linear",
-    description: "Issue sync and velocity",
-    available: false,
+    description: "Sync issues and track velocity across teams",
+    available: true,
     icon: LinearIcon,
   },
 ];
 
 export default function IntegrationsPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const connectedParam = searchParams.get("connected");
   const connectParam = searchParams.get("connect");
@@ -79,12 +74,32 @@ export default function IntegrationsPage() {
   const openedImportRef = useRef<string | null>(null);
 
   const connectedQuery = trpc.integration.listConnected.useQuery();
+  // Track which provider is currently being disconnected so the loading
+  // state is scoped to that provider's button only — without this both
+  // GitHub and Notion's Disconnect buttons share `disconnectMutation.isPending`
+  // and visually disconnect together.
+  const [disconnectingProvider, setDisconnectingProvider] = useState<
+    string | null
+  >(null);
+  const utils = trpc.useUtils();
   const disconnectMutation = trpc.integration.disconnect.useMutation({
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       connectedQuery.refetch();
+      // Drop cached org/preview lists — re-connecting may grant access to
+      // different orgs/repos. `reset()` clears the data (not just marks
+      // stale) so the import dialog shows a clean spinner instead of
+      // flashing the pre-grant snapshot before the fresh fetch lands.
+      if (variables.provider === "GITHUB") {
+        void utils.integration.github.listOrgs.reset();
+        void utils.integration.github.previewImport.reset();
+      } else if (variables.provider === "NOTION") {
+        void utils.integration.notion.listPages.reset();
+      }
+    },
+    onSettled: () => {
+      setDisconnectingProvider(null);
     },
   });
-  const utils = trpc.useUtils();
   const recleanMutation = trpc.integration.notion.recleanImported.useMutation();
 
   /**
@@ -127,54 +142,11 @@ export default function IntegrationsPage() {
     return () => window.removeEventListener("focus", refetchOnFocus);
   }, [refetchOnFocus]);
 
-  // Listen for deep link events (desktop: omnitool://oauth-complete?provider=xxx)
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    const handleOAuthComplete = (urls: string[]) => {
-      for (const rawUrl of urls) {
-        let url: URL;
-        try {
-          url = new URL(rawUrl);
-        } catch {
-          continue;
-        }
-
-        if (
-          url.protocol !== "omnitool:" ||
-          url.hostname !== "oauth-complete"
-        ) {
-          continue;
-        }
-
-        const provider = url.searchParams.get("provider");
-        const status = url.searchParams.get("status");
-        if (provider !== "github" && provider !== "notion") continue;
-
-        connectedQuery.refetch();
-
-        if (status === "success") {
-          router.replace(`/settings/integrations?connected=${provider}`);
-          if (provider === "github") {
-            setImportDialogOpen(true);
-          } else {
-            setNotionImportDialogOpen(true);
-          }
-        } else {
-          router.replace(`/settings/integrations?error=${provider}_oauth`);
-        }
-      }
-    };
-
-    let cleanup: (() => void) | null = null;
-    getCurrentDeepLinks().then(handleOAuthComplete);
-    onDeepLink(handleOAuthComplete).then((unlisten) => {
-      cleanup = unlisten;
-    });
-    return () => {
-      cleanup?.();
-    };
-  }, [connectedQuery, router]);
+  // Deep links are handled globally by DesktopAuthDeepLinkHandler, which
+  // soft-navigates here with `?connected=<provider>`. The connectedParam
+  // effect below opens the import dialog (guarded by openedImportRef so
+  // closing it doesn't immediately re-open). refetchOnFocus picks up the
+  // new ConnectedAccount row when the user returns to the app.
 
   const connectedMap = useMemo(() => {
     const map = new Map<
@@ -197,6 +169,11 @@ export default function IntegrationsPage() {
   useEffect(() => {
     if (connectedParam === "github" && openedImportRef.current !== "github") {
       openedImportRef.current = "github";
+      // Fresh OAuth may have unlocked new orgs (org admin granted third-party
+      // access between connections). `reset()` clears the cache entirely so
+      // the dialog renders one spinner → full result, instead of flashing
+      // the pre-grant list (personal-only) and then growing in the orgs.
+      void utils.integration.github.listOrgs.reset();
       setImportDialogOpen(true);
     }
 
@@ -204,7 +181,7 @@ export default function IntegrationsPage() {
       openedImportRef.current = "notion";
       setNotionImportDialogOpen(true);
     }
-  }, [connectedParam]);
+  }, [connectedParam, utils]);
 
   useEffect(() => {
     if (connectParam !== "github" && connectParam !== "notion") return;
@@ -228,11 +205,13 @@ export default function IntegrationsPage() {
     if (startedOAuthRef.current === connectParam) return;
     startedOAuthRef.current = connectParam;
 
-    void startOAuthFlow(
+    startOAuthFlow(
       connectParam === "github"
         ? "/api/integrations/github/authorize"
         : "/api/integrations/notion/authorize",
-    );
+    ).catch((err) => {
+      toast.error(`Failed to start OAuth: ${err instanceof Error ? err.message : "Unknown error"}`);
+    });
   }, [
     connectParam,
     connectedMap,
@@ -244,13 +223,14 @@ export default function IntegrationsPage() {
     if (!metadata) return null;
     try {
       const parsed = JSON.parse(metadata);
-      return parsed.login || parsed.name || parsed.workspace_name || null;
+      return parsed.login || parsed.name || parsed.workspace_name || parsed.team_name || null;
     } catch {
       return null;
     }
   }
 
   function handleDisconnect(provider: string) {
+    setDisconnectingProvider(provider);
     disconnectMutation.mutate({ provider });
   }
 
@@ -261,18 +241,25 @@ export default function IntegrationsPage() {
     const connected = connectedMap.get(integration.provider);
     const isGitHub = integration.key === "github";
     const isNotion = integration.key === "notion";
+    const isSlack = integration.key === "slack";
+    const isLinear = integration.key === "linear";
     const displayName = connected
       ? parseMetadataName(connected.metadata)
       : null;
 
     return (
       <Card key={integration.key}>
-        <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-4">
+        {/* Always stack vertically. The settings layout has its own sidebar
+         * which limits this card to ~712px even at 1280px viewport — too
+         * narrow for icon + description + 3 action buttons side-by-side
+         * (Notion connected state). Stacking gives the description full
+         * width and lets buttons wrap onto their own row underneath. */}
+        <CardContent className="flex flex-col gap-4 p-6">
+          <div className="flex min-w-0 items-start gap-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
               <integration.icon className="h-5 w-5" />
             </div>
-            <div className="min-w-0 space-y-1">
+            <div className="min-w-0 flex-1 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold">{integration.name}</h3>
                 {connected && <Badge variant="secondary">Connected</Badge>}
@@ -288,9 +275,9 @@ export default function IntegrationsPage() {
                   OAuth and sync are not wired for this provider yet.
                 </p>
               )}
-              {(isGitHub || isNotion) && connected && displayName && (
+              {(isGitHub || isNotion || isSlack || isLinear) && connected && displayName && (
                 <p className="text-xs text-muted-foreground">
-                  {isNotion ? "Workspace: " : "Signed in as "}
+                  {isNotion ? "Workspace: " : isSlack ? "Team: " : isLinear ? "Workspace: " : "Signed in as "}
                   <span className="font-medium text-foreground">
                     {displayName}
                   </span>
@@ -299,7 +286,7 @@ export default function IntegrationsPage() {
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {integration.available && isGitHub ? (
               connected ? (
                 <>
@@ -310,9 +297,9 @@ export default function IntegrationsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleDisconnect("GITHUB")}
-                    disabled={disconnectMutation.isPending}
+                    disabled={disconnectingProvider === "GITHUB"}
                   >
-                    {disconnectMutation.isPending
+                    {disconnectingProvider === "GITHUB"
                       ? "Disconnecting..."
                       : "Disconnect"}
                   </Button>
@@ -321,9 +308,11 @@ export default function IntegrationsPage() {
                 <Button
                   size="sm"
                   onClick={() => {
-                    void startOAuthFlow(
+                    startOAuthFlow(
                       "/api/integrations/github/authorize",
-                    );
+                    ).catch((err) => {
+                      toast.error(`GitHub connect failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+                    });
                   }}
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
@@ -351,9 +340,9 @@ export default function IntegrationsPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleDisconnect("NOTION")}
-                    disabled={disconnectMutation.isPending}
+                    disabled={disconnectingProvider === "NOTION"}
                   >
-                    {disconnectMutation.isPending
+                    {disconnectingProvider === "NOTION"
                       ? "Disconnecting..."
                       : "Disconnect"}
                   </Button>
@@ -362,9 +351,63 @@ export default function IntegrationsPage() {
                 <Button
                   size="sm"
                   onClick={() => {
-                    void startOAuthFlow(
+                    startOAuthFlow(
                       "/api/integrations/notion/authorize",
-                    );
+                    ).catch((err) => {
+                      toast.error(`Notion connect failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+                    });
+                  }}
+                >
+                  Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                </Button>
+              )
+            ) : integration.available && isSlack ? (
+              connected ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDisconnect("SLACK")}
+                  disabled={disconnectingProvider === "SLACK"}
+                >
+                  {disconnectingProvider === "SLACK"
+                    ? "Disconnecting..."
+                    : "Disconnect"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    startOAuthFlow(
+                      "/api/integrations/slack/authorize",
+                    ).catch((err) => {
+                      toast.error(`Slack connect failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+                    });
+                  }}
+                >
+                  Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                </Button>
+              )
+            ) : integration.available && isLinear ? (
+              connected ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDisconnect("LINEAR")}
+                  disabled={disconnectingProvider === "LINEAR"}
+                >
+                  {disconnectingProvider === "LINEAR"
+                    ? "Disconnecting..."
+                    : "Disconnect"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    startOAuthFlow(
+                      "/api/integrations/linear/authorize",
+                    ).catch((err) => {
+                      toast.error(`Linear connect failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+                    });
                   }}
                 >
                   Connect <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
@@ -407,6 +450,26 @@ export default function IntegrationsPage() {
           <CheckCircle2 className="h-5 w-5 shrink-0" />
           <p className="text-sm">
             Notion connected successfully. You can now import pages as notes.
+          </p>
+        </div>
+      )}
+
+      {connectedParam === "slack" && (
+        <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-4 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+          <CheckCircle2 className="h-5 w-5 shrink-0" />
+          <p className="text-sm">
+            Slack connected successfully. Notifications and task hooks are now
+            available.
+          </p>
+        </div>
+      )}
+
+      {connectedParam === "linear" && (
+        <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-4 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-200">
+          <CheckCircle2 className="h-5 w-5 shrink-0" />
+          <p className="text-sm">
+            Linear connected successfully. Issues and velocity tracking are now
+            available.
           </p>
         </div>
       )}

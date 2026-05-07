@@ -7,7 +7,7 @@
  * into the build. Both this file and the tRPC router import from here.
  */
 
-export const VIEW_MODES = ["cards", "list", "gallery", "tree"] as const;
+export const VIEW_MODES = ["cards", "list", "tree", "calendar", "timeline"] as const;
 export const SORT_BYS = [
   "updatedDesc",
   "updatedAsc",

@@ -32,6 +32,36 @@ function getTeamColor(name: string) {
   return teamColors[Math.abs(hash) % teamColors.length];
 }
 
+function TeamAvatar({
+  team,
+  size,
+}: {
+  team: { name: string; avatarUrl: string | null };
+  size: "sm" | "md";
+}) {
+  const dim = size === "md" ? "h-7 w-7 text-xs" : "h-6 w-6 text-[10px]";
+  if (team.avatarUrl) {
+    return (
+      <img
+        src={team.avatarUrl}
+        alt=""
+        className={cn("rounded-md object-cover shrink-0 bg-muted", dim)}
+      />
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-center rounded-md text-white font-bold shrink-0",
+        getTeamColor(team.name),
+        dim,
+      )}
+    >
+      {team.name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
 export function TeamSwitcher() {
   const { activeTeam, teams, switchTeam, isLoading } = useTeam();
   const [open, setOpen] = useState(false);
@@ -51,14 +81,7 @@ export function TeamSwitcher() {
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button className="flex h-12 w-full items-center gap-2 px-4 text-left hover:bg-accent/50 transition-colors">
-            <div
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md text-white text-xs font-bold shrink-0",
-                getTeamColor(activeTeam.name)
-              )}
-            >
-              {activeTeam.name.charAt(0).toUpperCase()}
-            </div>
+            <TeamAvatar team={activeTeam} size="md" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold truncate">
                 {activeTeam.name}
@@ -90,14 +113,7 @@ export function TeamSwitcher() {
                 team.id === activeTeam.id && "bg-accent"
               )}
             >
-              <div
-                className={cn(
-                  "flex h-6 w-6 items-center justify-center rounded text-white text-[10px] font-bold shrink-0",
-                  getTeamColor(team.name)
-                )}
-              >
-                {team.name.charAt(0).toUpperCase()}
-              </div>
+              <TeamAvatar team={team} size="sm" />
               <span className="flex-1 truncate text-left">{team.name}</span>
               {team.id === activeTeam.id && (
                 <Check className="h-4 w-4 text-primary shrink-0" />

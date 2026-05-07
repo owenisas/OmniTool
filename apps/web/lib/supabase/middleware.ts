@@ -35,12 +35,20 @@ export async function updateSession(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public routes — no auth required
+  // OAuth integration callbacks are included because the system browser
+  // (used by Tauri desktop) has no session cookies. Those routes verify
+  // authenticity via HMAC-signed state (desktop) or session + CSRF (web).
   const isPublic =
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
     pathname.startsWith("/reset-password") ||
     pathname.startsWith("/update-password") ||
-    pathname.startsWith("/api/auth");
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/integrations/github/callback") ||
+    pathname.startsWith("/api/integrations/notion/callback") ||
+    pathname.startsWith("/api/integrations/slack/callback") ||
+    pathname.startsWith("/api/integrations/linear/callback") ||
+    pathname.startsWith("/shared/notes/");
 
   if (!user && !isPublic) {
     const loginUrl = new URL("/login", request.url);

@@ -17,6 +17,9 @@ import { userNotePreferenceRouter } from "./user-note-preference";
 import { activityRouter } from "./activity";
 import { entityLinkRouter } from "./entity-link";
 import { handoffRouter } from "./handoff";
+import { noteTemplateRouter } from "./note-template";
+import { noteShareRouter } from "./note-share";
+import { workflowRouter } from "./workflow";
 
 export const appRouter = createTRPCRouter({
   user: userRouter,
@@ -37,6 +40,9 @@ export const appRouter = createTRPCRouter({
   activity: activityRouter,
   entityLink: entityLinkRouter,
   handoff: handoffRouter,
+  noteTemplate: noteTemplateRouter,
+  noteShare: noteShareRouter,
+  workflow: workflowRouter,
 });
 
 export type AppRouter = typeof appRouter;

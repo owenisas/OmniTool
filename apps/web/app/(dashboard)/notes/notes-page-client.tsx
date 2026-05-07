@@ -43,9 +43,10 @@ import { MoveNoteDialog } from "@/components/notes/move-note-dialog";
 import { NotesViewControls } from "@/components/notes/notes-view-controls";
 import { TeamspaceSwitcher } from "@/components/notes/teamspace-switcher";
 import { useNotesRealtime } from "@/lib/notes/use-realtime";
+import { NotesCalendarView } from "@/components/notes/views/notes-calendar-view";
 import { NotesCardsView } from "@/components/notes/views/notes-cards-view";
 import { NotesListView } from "@/components/notes/views/notes-list-view";
-import { NotesGalleryView } from "@/components/notes/views/notes-gallery-view";
+import { NotesTimelineView } from "@/components/notes/views/notes-timeline-view";
 import {
   groupByParent,
   groupNotes,
@@ -63,6 +64,12 @@ import {
   type ViewPrefs,
 } from "@/lib/notes/view-prefs";
 import { cn } from "@/lib/utils";
+import {
+  NoteFilterBuilder,
+  EMPTY_FILTER,
+  toNoteFilter,
+  type FilterBuilderState,
+} from "@/components/notes/note-filter-builder";
 
 type ListNote = inferRouterOutputs<AppRouter>["note"]["list"][number];
 
@@ -84,6 +91,7 @@ function NoteRowMenu({
   const togglePin = trpc.note.update.useMutation({
     onSuccess: () => {
       void utils.note.list.invalidate();
+      void utils.note.listPinned.invalidate();
     },
   });
 
@@ -393,12 +401,22 @@ export function NotesPageClient() {
   const [creatingChildOf, setCreatingChildOf] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
+  const [showFilterBar, setShowFilterBar] = useState(false);
+  const [filterState, setFilterState] = useState<FilterBuilderState>(EMPTY_FILTER);
+  const activeFilter = toNoteFilter(filterState);
 
   const utils = trpc.useUtils();
   const { data: notes, isLoading } = trpc.note.list.useQuery({
     search: appliedSearch || undefined,
     tag: appliedTag || undefined,
   });
+
+  // Filtered query — only runs when the user has active filter conditions.
+  const { data: filteredNotes, isLoading: isFilteredLoading } =
+    trpc.note.listFiltered.useQuery(
+      { filter: activeFilter!, take: 200 },
+      { enabled: activeFilter !== null },
+    );
 
   // Server source of truth for view preferences. localStorage paints first
   // (synchronous read on mount); this query reconciles to the server value.
@@ -504,11 +522,13 @@ export function NotesPageClient() {
   }, [activeId, notes]);
 
   // Apply the active-teamspace lens. `null` = show notes from every teamspace.
+  // When filters are active, use the filtered result set instead of the default list.
   const visibleNotes = useMemo<ListNote[]>(() => {
-    if (!notes) return [];
-    if (!viewPrefs.activeTeamspaceId) return notes;
-    return notes.filter((n) => n.teamId === viewPrefs.activeTeamspaceId);
-  }, [notes, viewPrefs.activeTeamspaceId]);
+    const source = activeFilter ? filteredNotes : notes;
+    if (!source) return [];
+    if (!viewPrefs.activeTeamspaceId) return source;
+    return source.filter((n) => n.teamId === viewPrefs.activeTeamspaceId);
+  }, [notes, filteredNotes, activeFilter, viewPrefs.activeTeamspaceId]);
 
   const grouped = useMemo(
     () => (visibleNotes.length ? groupByParent(visibleNotes) : new Map()),
@@ -604,7 +624,7 @@ export function NotesPageClient() {
     });
   }
 
-  const isFiltering = Boolean(appliedSearch || appliedTag);
+  const isFiltering = Boolean(appliedSearch || appliedTag || activeFilter);
   const showEmptyState =
     !isLoading && notes && notes.length === 0 && !isFiltering;
 
@@ -764,7 +784,28 @@ export function NotesPageClient() {
               onViewModeChange={(v) => applyViewPrefs({ viewMode: v })}
               onSortByChange={(v) => applyViewPrefs({ sortBy: v })}
               onGroupByChange={(v) => applyViewPrefs({ groupBy: v })}
+              filterActive={activeFilter !== null || showFilterBar}
+              onToggleFilter={() => {
+                setShowFilterBar((prev) => {
+                  // Collapsing the bar clears filters so the list reverts.
+                  if (prev) setFilterState(EMPTY_FILTER);
+                  return !prev;
+                });
+              }}
             />
+
+            {showFilterBar && (
+              <NoteFilterBuilder
+                value={filterState}
+                onChange={setFilterState}
+              />
+            )}
+
+            {activeFilter && isFilteredLoading && (
+              <div className="flex justify-center py-4">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            )}
 
             {viewPrefs.viewMode === "tree" ? (
               notes && notes.length > 0 ? (
@@ -787,10 +828,15 @@ export function NotesPageClient() {
                   />
                 </nav>
               ) : null
+            ) : viewPrefs.viewMode === "calendar" ? (
+              <NotesCalendarView
+                notes={visibleNotes}
+                onDayCreate={() => quickCreateUntitled()}
+              />
+            ) : viewPrefs.viewMode === "timeline" ? (
+              <NotesTimelineView notes={visibleNotes} />
             ) : viewPrefs.viewMode === "list" ? (
               <NotesListView groups={mainNoteGroups} />
-            ) : viewPrefs.viewMode === "gallery" ? (
-              <NotesGalleryView groups={mainNoteGroups} />
             ) : (
               <NotesCardsView groups={mainNoteGroups} />
             )}

@@ -14,7 +14,7 @@ import {
  * - autoCreateProjectNotes: when true, project.create auto-spawns a linked note
  * - projectNotesParentId: optional parent note under which auto-created project
  *   notes are placed (nullable = top-level)
- * - viewMode: how the /notes main pane is rendered (cards | list | gallery | tree)
+ * - viewMode: how the /notes main pane is rendered (cards | list | tree)
  * - sortBy: ordering applied within the chosen view
  * - groupBy: optional bucketing for the chosen view
  * - activeTeamspaceId: last-selected teamspace lens on the /notes page.
