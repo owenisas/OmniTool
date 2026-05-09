@@ -112,6 +112,7 @@ export function NoteBlockEditor({
   const migratedNoteIdRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef({ title: note.title, dirty: false });
+  const syncedBlocksRef = useRef<string>(JSON.stringify(normalizeStoredBlocks(note.blocks)));
 
   const utils = trpc.useUtils();
 
@@ -123,6 +124,29 @@ export function NoteBlockEditor({
     },
     [note.id],
   );
+
+  // Keep the active BlockNote document aligned with fresh server snapshots from
+  // realtime-invalidated `getById` queries. Without this, peers' edits update the
+  // note cache but never hydrate into the editor until this component remounts.
+  useEffect(() => {
+    const nextBlocks = normalizeStoredBlocks(note.blocks);
+    const nextSignature = JSON.stringify(nextBlocks);
+    if (syncedBlocksRef.current === nextSignature) return;
+
+    // Don't clobber unsaved local edits while typing; we’ll apply the update on
+    // the next non-dirty render.
+    if (latestRef.current.dirty) {
+      syncedBlocksRef.current = nextSignature;
+      return;
+    }
+
+    const blockIds = editor.document.map((block) => block.id);
+    if (blockIds.length === 0) return;
+
+    editor.replaceBlocks(blockIds, nextBlocks as any);
+    syncedBlocksRef.current = nextSignature;
+    latestRef.current.dirty = false;
+  }, [editor, note.id, note.blocks]);
 
   // Scroll to + focus the requested block on mount if a `focusBlockId` was
   // passed in (e.g. via the inbox jump-through). BlockNote's
