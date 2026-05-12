@@ -34,6 +34,39 @@ interface DailySummaryResult {
   risks: string[];
 }
 
+async function resolveDailySummaryTeamId(
+  userId: string,
+  cookieTeamId: string | null,
+): Promise<string | null> {
+  if (cookieTeamId) {
+    const cookieMembership = await prisma.teamMember.findUnique({
+      where: { userId_teamId: { userId, teamId: cookieTeamId } },
+      select: {
+        teamId: true,
+        team: { select: { kind: true } },
+      },
+    });
+
+    if (cookieMembership?.team.kind === "TEAM") {
+      return cookieMembership.teamId;
+    }
+  }
+
+  const defaultTeamMembership = await prisma.teamMember.findFirst({
+    where: { userId, team: { kind: "TEAM" } },
+    select: { teamId: true },
+    orderBy: { joinedAt: "asc" },
+  });
+  if (defaultTeamMembership) return defaultTeamMembership.teamId;
+
+  const anyMembership = await prisma.teamMember.findFirst({
+    where: { userId },
+    select: { teamId: true },
+    orderBy: { joinedAt: "asc" },
+  });
+  return anyMembership?.teamId ?? null;
+}
+
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -49,7 +82,10 @@ export async function POST(req: Request) {
 
     // Resolve active team from cookie
     const cookieStore = await cookies();
-    const teamId = cookieStore.get(TEAM_COOKIE_NAME)?.value ?? null;
+    const teamId = await resolveDailySummaryTeamId(
+      userId,
+      cookieStore.get(TEAM_COOKIE_NAME)?.value ?? null,
+    );
 
     // Check DB cache (unless force refresh)
     if (!force) {
@@ -57,6 +93,14 @@ export async function POST(req: Request) {
         where: { userId_date: { userId, date: dateStr } },
       });
       if (cached) {
+        if (cached.teamId !== teamId) {
+          await prisma.dailyCodingSummary.update({
+            where: { id: cached.id },
+            data: { teamId },
+          });
+          cached.teamId = teamId;
+        }
+
         const age = Date.now() - cached.updatedAt.getTime();
         if (age < CACHE_STALE_MS) {
           return NextResponse.json({

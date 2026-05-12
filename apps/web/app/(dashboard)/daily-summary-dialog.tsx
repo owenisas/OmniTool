@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@omnitool/ui/components/button";
 import {
@@ -12,6 +13,7 @@ import {
 import { Badge } from "@omnitool/ui/components/badge";
 import { Sparkles, RefreshCw, AlertTriangle, Coffee } from "lucide-react";
 import { runBackgroundTask } from "@/lib/background-tasks/run";
+import { trpc } from "@/trpc/client";
 
 interface DailySummary {
   title: string;
@@ -43,6 +45,17 @@ export function DailySummaryButton() {
   const [summary, setSummary] = useState<DailySummary | null>(null);
   const [noSessions, setNoSessions] = useState(false);
   const [running, setRunning] = useState(false);
+  const utils = trpc.useUtils();
+
+  function applyResult(result: SummaryResponse) {
+    if (result.summary) {
+      setSummary(result.summary);
+      setNoSessions(false);
+    } else {
+      setSummary(null);
+      setNoSessions(true);
+    }
+  }
 
   function generate(force: boolean) {
     if (running) return;
@@ -52,18 +65,13 @@ export function DailySummaryButton() {
       id: `daily-summary-${Date.now()}`,
       kind: "daily-summary",
       label: "Summarizing today's coding sessions",
+      href: "/team-activity",
       successToast: (r) =>
         r.summary
           ? `Daily summary ready: ${r.summary.title}`
           : "No coding sessions found for today",
       onViewResult: (r) => {
-        if (r.summary) {
-          setSummary(r.summary);
-          setNoSessions(false);
-        } else {
-          setSummary(null);
-          setNoSessions(true);
-        }
+        applyResult(r);
         setOpen(true);
       },
       work: async () => {
@@ -83,15 +91,11 @@ export function DailySummaryButton() {
         }
         return data as SummaryResponse;
       },
-      onSuccess: (r) => {
-        if (r.summary) {
-          setSummary(r.summary);
-          setNoSessions(false);
-        } else {
-          setSummary(null);
-          setNoSessions(true);
-        }
+      onSuccess: async (r) => {
+        applyResult(r);
         setRunning(false);
+        setOpen(true);
+        await utils.teamActivity.getByDate.invalidate();
       },
       onError: () => {
         setRunning(false);
@@ -220,19 +224,29 @@ export function DailySummaryButton() {
                 )}
 
                 <div className="flex justify-end pt-2 border-t">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setOpen(false);
-                      generate(true);
-                    }}
-                    disabled={running}
-                    className="gap-2 text-xs text-muted-foreground"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                    Regenerate (runs in background)
-                  </Button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <Button asChild variant="ghost" size="sm">
+                      <Link
+                        href="/team-activity"
+                        className="text-xs text-muted-foreground"
+                      >
+                        View in Team Activity
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setOpen(false);
+                        generate(true);
+                      }}
+                      disabled={running}
+                      className="gap-2 text-xs text-muted-foreground"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Regenerate (runs in background)
+                    </Button>
+                  </div>
                 </div>
               </>
             )}

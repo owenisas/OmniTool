@@ -27,7 +27,14 @@ export function TeamActivityClient() {
   const dateStr = getDateString(currentDate);
 
   const { data: activities, isLoading, error } =
-    trpc.teamActivity.getByDate.useQuery({ date: dateStr });
+    trpc.teamActivity.getByDate.useQuery(
+      { date: dateStr },
+      {
+        staleTime: 0,
+        refetchOnMount: "always",
+        refetchOnReconnect: "always",
+      },
+    );
 
   const goBack = () => setCurrentDate((d) => subDays(d, 1));
   const goForward = () => setCurrentDate((d) => addDays(d, 1));
