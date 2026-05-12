@@ -112,7 +112,8 @@ done
 
 MOUNT_POINT="$(
   hdiutil attach "$DMG" -nobrowse -noautoopen -plist \
-    | plutil -extract "system-entities".0."mount-point" raw -
+    | plutil -extract "system-entities" json -o - - \
+    | node -e 'let input = ""; process.stdin.on("data", (chunk) => { input += chunk; }); process.stdin.on("end", () => { const entity = JSON.parse(input).find((item) => item["mount-point"]); if (!entity) process.exit(1); process.stdout.write(entity["mount-point"]); });'
 )"
 
 cleanup() {

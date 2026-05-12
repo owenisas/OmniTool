@@ -140,17 +140,25 @@ export async function assertTeamMembership(
 
 export const teamProtectedProcedure = protectedProcedure.use(
   async ({ ctx, next }) => {
-    let teamId = ctx.activeTeamId;
+    const findDefaultMembership = () =>
+      ctx.prisma.teamMember.findFirst({
+        where: { userId: ctx.userId, team: { kind: "TEAM" } },
+        select: { teamId: true, role: true },
+        orderBy: { joinedAt: "asc" },
+      });
 
-    // Auto-select first team if no cookie set
-    if (!teamId) {
-      const firstMembership = await ctx.prisma.teamMember.findFirst({
+    const findAnyMembership = () =>
+      ctx.prisma.teamMember.findFirst({
         where: { userId: ctx.userId },
         select: { teamId: true, role: true },
         orderBy: { joinedAt: "asc" },
       });
 
-      if (!firstMembership) {
+    const useDefaultMembership = async () => {
+      const membership =
+        (await findDefaultMembership()) ?? (await findAnyMembership());
+
+      if (!membership) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: "You are not a member of any team",
@@ -160,32 +168,51 @@ export const teamProtectedProcedure = protectedProcedure.use(
       return next({
         ctx: {
           ...ctx,
-          teamId: firstMembership.teamId,
-          teamRole: firstMembership.role,
+          teamId: membership.teamId,
+          teamRole: membership.role,
         },
       });
+    };
+
+    // Auto-select first team if no cookie set
+    if (!ctx.activeTeamId) {
+      return useDefaultMembership();
     }
 
     const membership = await ctx.prisma.teamMember.findUnique({
       where: {
         userId_teamId: {
           userId: ctx.userId,
-          teamId,
+          teamId: ctx.activeTeamId,
         },
+      },
+      select: {
+        role: true,
+        team: { select: { kind: true } },
       },
     });
 
     if (!membership) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Not a member of this team",
-      });
+      return useDefaultMembership();
+    }
+
+    if (membership.team.kind === "PERSONAL") {
+      const defaultTeamMembership = await findDefaultMembership();
+      if (defaultTeamMembership) {
+        return next({
+          ctx: {
+            ...ctx,
+            teamId: defaultTeamMembership.teamId,
+            teamRole: defaultTeamMembership.role,
+          },
+        });
+      }
     }
 
     return next({
       ctx: {
         ...ctx,
-        teamId,
+        teamId: ctx.activeTeamId,
         teamRole: membership.role,
       },
     });

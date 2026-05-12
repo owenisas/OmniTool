@@ -31,7 +31,7 @@ function getUrl() {
  * procedure signature change, schema migration). Cache mismatches are
  * dropped on rehydration, forcing a fresh server fetch.
  */
-const PERSIST_BUSTER = "omnitool:v1";
+const PERSIST_BUSTER = "omnitool:v2";
 
 /**
  * Storage key for the React Query persisted cache. Cache is serialized

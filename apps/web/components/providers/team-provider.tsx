@@ -14,6 +14,7 @@ interface TeamInfo {
   id: string;
   name: string;
   slug: string;
+  kind: string;
   description: string | null;
   avatarUrl: string | null;
   githubOrgLogin: string | null;
@@ -35,7 +36,13 @@ const TeamContext = createContext<TeamContextValue>({
   isLoading: true,
 });
 
-export function TeamProvider({ children }: { children: React.ReactNode }) {
+export function TeamProvider({
+  children,
+  initialTeams = [],
+}: {
+  children: React.ReactNode;
+  initialTeams?: Array<TeamInfo & { role: string }>;
+}) {
   const [activeTeamId, setActiveTeamId] = useState<string | null>(() => {
     if (typeof document === "undefined") return null;
     const match = document.cookie
@@ -46,39 +53,36 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
   });
 
   const utils = trpc.useUtils();
-  const { data: user, isLoading } = trpc.user.me.useQuery(undefined, {
-    staleTime: 60_000,
-  });
+  const { data: fetchedTeams, isLoading: isTeamsLoading } =
+    trpc.team.list.useQuery(undefined, {
+      refetchOnMount: "always",
+      staleTime: 60_000,
+    });
+  const workspaceTeams = fetchedTeams ?? initialTeams;
+  const isLoading = isTeamsLoading && workspaceTeams.length === 0;
 
-  const teams = (user?.teamMembers ?? []).map((m) => ({
-    id: m.team.id,
-    name: m.team.name,
-    slug: m.team.slug,
-    description: m.team.description,
-    avatarUrl: m.team.avatarUrl ?? null,
-    githubOrgLogin: m.team.githubOrgLogin,
-    role: m.role,
-  }));
+  const teams = (workspaceTeams ?? [])
+    .map((team) => ({
+      id: team.id,
+      name: team.name,
+      slug: team.slug,
+      kind: team.kind,
+      description: team.description,
+      avatarUrl: team.avatarUrl ?? null,
+      githubOrgLogin: team.githubOrgLogin,
+      role: team.role,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Auto-select first team if none set
+  const activeTeam =
+    teams.find((t) => t.id === activeTeamId) ?? teams[0] ?? null;
+  const effectiveActiveTeamId = activeTeam?.id ?? null;
+
   useEffect(() => {
-    if (!isLoading && teams.length > 0 && !activeTeamId) {
-      const firstId = teams[0].id;
-      setActiveTeamId(firstId);
-      setActiveTeamCookie(firstId);
-    }
-  }, [isLoading, teams, activeTeamId]);
+    if (isLoading || !activeTeam || activeTeam.id === activeTeamId) return;
 
-  // If current activeTeamId not in teams list, reset
-  useEffect(() => {
-    if (!isLoading && teams.length > 0 && activeTeamId) {
-      if (!teams.find((t) => t.id === activeTeamId)) {
-        const firstId = teams[0].id;
-        setActiveTeamId(firstId);
-        setActiveTeamCookie(firstId);
-      }
-    }
-  }, [isLoading, teams, activeTeamId]);
+    setActiveTeamCookie(activeTeam.id);
+  }, [isLoading, activeTeam, activeTeamId]);
 
   const switchTeam = useCallback(
     (teamId: string) => {
@@ -90,11 +94,15 @@ export function TeamProvider({ children }: { children: React.ReactNode }) {
     [utils]
   );
 
-  const activeTeam = teams.find((t) => t.id === activeTeamId) ?? null;
-
   return (
     <TeamContext.Provider
-      value={{ activeTeamId, activeTeam, teams, switchTeam, isLoading }}
+      value={{
+        activeTeamId: effectiveActiveTeamId,
+        activeTeam,
+        teams,
+        switchTeam,
+        isLoading,
+      }}
     >
       {children}
     </TeamContext.Provider>

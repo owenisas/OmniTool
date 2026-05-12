@@ -10,6 +10,33 @@ import { CommandPaletteProvider } from "@/components/command-palette/command-pal
 import { PageTransition } from "@/components/layout/page-transition";
 import { PowerSyncProvider } from "@/components/providers/powersync-provider";
 import { TeamProvider } from "@/components/providers/team-provider";
+import { prisma } from "@omnitool/database";
+
+async function getInitialTeams(userId: string) {
+  try {
+    return await prisma.teamMember.findMany({
+      where: { userId, team: { kind: "TEAM" } },
+      select: {
+        role: true,
+        team: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            kind: true,
+            description: true,
+            avatarUrl: true,
+            githubOrgLogin: true,
+          },
+        },
+      },
+      orderBy: { team: { name: "asc" } },
+    });
+  } catch (error) {
+    console.error("[dashboard-layout] initial team preload failed", error);
+    return [];
+  }
+}
 
 export default async function DashboardLayout({
   children,
@@ -19,8 +46,15 @@ export default async function DashboardLayout({
   const session = await auth();
   if (!session?.user) redirect("/login");
 
+  const initialTeams = await getInitialTeams(session.user.id);
+
   return (
-    <TeamProvider>
+    <TeamProvider
+      initialTeams={initialTeams.map(({ role, team }) => ({
+        ...team,
+        role,
+      }))}
+    >
       <PowerSyncProvider>
         <SidebarProvider>
           <CommandPaletteProvider>
