@@ -6,15 +6,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="${OMNITOOL_APP_NAME:-OmniTool}"
 DEFAULT_INSTALL_DIR="/Applications"
 INSTALL_DIR="${OMNITOOL_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+ENV_FILE="${OMNITOOL_SERVER_ENV:-}"
+SERVER_PORT="${OMNITOOL_SERVER_PORT:-19283}"
 BUILD=1
 OPEN_AFTER_INSTALL=1
+PROVISION_ENV=1
 
 usage() {
   cat <<USAGE
-Usage: $0 [--skip-build] [--no-open]
+Usage: $0 [--skip-build] [--no-open] [--env-file path/to/server.env] [--no-env]
 
 Environment:
   OMNITOOL_INSTALL_DIR   Install destination directory. Defaults to /Applications.
+  OMNITOOL_SERVER_ENV    Env file to install as desktop server.env. Defaults to .env when present.
+  OMNITOOL_SERVER_PORT   Local desktop server port. Defaults to 19283.
 USAGE
 }
 
@@ -29,6 +34,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-open)
       OPEN_AFTER_INSTALL=0
+      shift
+      ;;
+    --env-file)
+      if [[ -z "${2:-}" ]]; then
+        echo "[desktop-install] --env-file requires a path." >&2
+        exit 1
+      fi
+      ENV_FILE="$2"
+      shift 2
+      ;;
+    --no-env)
+      PROVISION_ENV=0
       shift
       ;;
     -h|--help)
@@ -73,6 +90,20 @@ fi
 echo "[desktop-install] Using DMG: $DMG"
 
 osascript -e "quit app \"$APP_NAME\"" >/dev/null 2>&1 || true
+
+STALE_PIDS="$(lsof -t -nP -iTCP:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+if [[ -n "$STALE_PIDS" ]]; then
+  echo "[desktop-install] Stopping stale sidecar listener(s) on port $SERVER_PORT: $STALE_PIDS"
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" >/dev/null 2>&1 || true
+  done <<< "$STALE_PIDS"
+  sleep 1
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  done <<< "$(lsof -t -nP -iTCP:"$SERVER_PORT" -sTCP:LISTEN 2>/dev/null | sort -u || true)"
+fi
 
 for volume in /Volumes/"$APP_NAME"*; do
   [[ -e "$volume" ]] || continue
@@ -121,6 +152,18 @@ rm -rf \
   "$HOME/Library/Caches/omnitool-desktop/WebKit"
 
 echo "[desktop-install] Installed $DEST_APP"
+
+if [[ "$PROVISION_ENV" -eq 1 ]]; then
+  if [[ -z "$ENV_FILE" && -f "$ROOT_DIR/.env" ]]; then
+    ENV_FILE="$ROOT_DIR/.env"
+  fi
+
+  if [[ -n "$ENV_FILE" ]]; then
+    "$ROOT_DIR/scripts/desktop-install-env.sh" "$ENV_FILE"
+  else
+    echo "[desktop-install] No server env file installed; pass --env-file or set OMNITOOL_SERVER_ENV."
+  fi
+fi
 
 if [[ "$OPEN_AFTER_INSTALL" -eq 1 ]]; then
   open "$DEST_APP"

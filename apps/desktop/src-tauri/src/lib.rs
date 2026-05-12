@@ -177,8 +177,11 @@ fn find_server_js(server_dir: &std::path::Path) -> Result<std::path::PathBuf, St
 /// it. The port is hardcoded for OmniTool's use, so collision with any
 /// other service is unexpected and considered a misconfiguration.
 fn reclaim_port_if_stuck(port: u16) {
-    // Probe: try binding briefly. Bind succeeds = port is free → return.
-    if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+    // Probe both IPv4 and IPv6 loopback. Next may bind `localhost` as ::1 on
+    // macOS; checking only 127.0.0.1 misses that stale sidecar.
+    if TcpListener::bind(("127.0.0.1", port)).is_ok()
+        && TcpListener::bind(("::1", port)).is_ok()
+    {
         return;
     }
     eprintln!(
@@ -231,7 +234,9 @@ fn reclaim_port_if_stuck(port: u16) {
 
     // Confirm the port is now free; if not, log loudly and continue —
     // spawn will likely fail and surface a clearer error to the user.
-    if TcpListener::bind(("127.0.0.1", port)).is_err() {
+    if TcpListener::bind(("127.0.0.1", port)).is_err()
+        || TcpListener::bind(("::1", port)).is_err()
+    {
         eprintln!(
             "[omnitool] Port {port} is STILL in use after reclaim attempt. \
              Sidecar spawn will probably fail."
