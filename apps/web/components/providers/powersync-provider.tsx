@@ -41,23 +41,11 @@ export function PowerSyncProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     void (async () => {
-      const res = await fetch("/api/sync/token", { credentials: "include" });
-      if (!res.ok || cancelled) return;
-      const data = (await res.json()) as {
-        syncUrl?: string | null;
-        powersyncToken?: string | null;
-      };
-      if (!data.syncUrl || !data.powersyncToken || cancelled) {
-        setDb(null);
-        return;
-      }
-
       const instance = new PowerSyncDatabase({
         schema: omniPowerSyncSchema,
         database: { dbFilename: "omnitool-powersync.db" },
       });
       await instance.init();
-      await instance.connect(createOmniPowerSyncConnector());
 
       if (cancelled) {
         await instance.close();
@@ -66,6 +54,12 @@ export function PowerSyncProvider({ children }: { children: React.ReactNode }) {
 
       instanceRef.current = instance;
       setDb(instance);
+
+      try {
+        await instance.connect(createOmniPowerSyncConnector());
+      } catch (error) {
+        console.warn("[powersync] Running from local cache only.", error);
+      }
     })();
 
     return () => {
