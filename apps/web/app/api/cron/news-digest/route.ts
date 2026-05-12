@@ -3,6 +3,7 @@ import { prisma } from "@omnitool/database";
 import type { Prisma } from "@omnitool/database";
 import { extractTopicsFromNotes } from "@/lib/ai/topic-extraction";
 import { searchNewsForTopics, synthesizeDigest } from "@/lib/ai/news-search";
+import { requireCronAuthorization } from "@/lib/cron/auth";
 
 /**
  * Vercel Cron handler: Generate daily news digests for opted-in users.
@@ -11,12 +12,8 @@ import { searchNewsForTopics, synthesizeDigest } from "@/lib/ai/news-search";
  * Security: Vercel Cron sends CRON_SECRET in the Authorization header.
  */
 export async function GET(req: Request) {
-  // Verify cron secret (Vercel automatically adds this for cron jobs)
-  const authHeader = req.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const unauthorized = requireCronAuthorization(req);
+  if (unauthorized) return unauthorized;
 
   const today = new Date().toISOString().split("T")[0]!;
 

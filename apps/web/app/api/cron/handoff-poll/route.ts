@@ -4,17 +4,16 @@ import type { Prisma } from "@omnitool/database";
 import { pollCodexTask } from "@/lib/handoffs/providers/codex";
 import { pollClaudeCodeTask } from "@/lib/handoffs/providers/claude-code";
 import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
+import { requireCronAuthorization } from "@/lib/cron/auth";
 
 /**
  * Vercel Cron handler: Poll active handoffs for status updates.
- * Schedule: every 5 minutes
+ * Schedule: daily on the current Vercel Hobby deployment.
+ * Increase this to every 5 minutes only after moving the project to Pro.
  */
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const unauthorized = requireCronAuthorization(req);
+  if (unauthorized) return unauthorized;
 
   // Find all handoffs that are submitted or in progress
   const activeHandoffs = await prisma.agentHandoff.findMany({

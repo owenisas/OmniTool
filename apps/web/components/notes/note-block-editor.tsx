@@ -33,6 +33,7 @@ import { InlineAIPrompt } from "./ai/inline-ai-prompt";
 import { AskAIToolbarButton } from "./ai/ask-ai-toolbar-button";
 import { noteSchema } from "./blocks/schema";
 import { uploadAttachment } from "@/lib/notes/upload-attachment";
+import { detectAndConvertUrlBlocks } from "@/lib/notes/url-detect";
 import { EmbedPicker, type EmbedInsertEvent } from "./blocks/embed-picker";
 import { LinkedEntityPill } from "./linked-entity-pill";
 import { NoteHistorySheet } from "./note-history-sheet";
@@ -128,24 +129,26 @@ export function NoteBlockEditor({
   // Keep the active BlockNote document aligned with fresh server snapshots from
   // realtime-invalidated `getById` queries. Without this, peers' edits update the
   // note cache but never hydrate into the editor until this component remounts.
+  //
+  // Concurrency rule: while the local user is mid-edit (dirty), do NOT clobber
+  // their buffer. We also do NOT advance `syncedBlocksRef` to the peer's
+  // signature — advancing it without applying caused the next equal-signature
+  // tick to short-circuit, permanently dropping the peer edit. Instead, leave
+  // the ref at the last-applied signature; once dirty clears (autosave
+  // success → realtime echo of own write fires the effect again), the
+  // post-merge server snapshot will be applied normally.
   useEffect(() => {
     const nextBlocks = normalizeStoredBlocks(note.blocks);
     const nextSignature = JSON.stringify(nextBlocks);
     if (syncedBlocksRef.current === nextSignature) return;
 
-    // Don't clobber unsaved local edits while typing; we’ll apply the update on
-    // the next non-dirty render.
-    if (latestRef.current.dirty) {
-      syncedBlocksRef.current = nextSignature;
-      return;
-    }
+    if (latestRef.current.dirty) return;
 
     const blockIds = editor.document.map((block) => block.id);
     if (blockIds.length === 0) return;
 
     editor.replaceBlocks(blockIds, nextBlocks as any);
     syncedBlocksRef.current = nextSignature;
-    latestRef.current.dirty = false;
   }, [editor, note.id, note.blocks]);
 
   // Scroll to + focus the requested block on mount if a `focusBlockId` was
@@ -566,6 +569,14 @@ export function NoteBlockEditor({
           slashMenu={false}
           formattingToolbar={false}
           onChange={() => {
+            // Convert paragraph blocks containing only a Linear issue URL
+            // or a GitHub PR URL into the corresponding embed block.
+            // Idempotent — once converted, the paragraph type is gone.
+            try {
+              detectAndConvertUrlBlocks(editor as unknown as Parameters<typeof detectAndConvertUrlBlocks>[0]);
+            } catch {
+              // Detection should never block typing.
+            }
             scheduleSave();
           }}
         >

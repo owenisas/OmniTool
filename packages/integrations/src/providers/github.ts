@@ -217,6 +217,54 @@ export async function updateGitHubIssue(
 }
 
 /**
+ * Fetch a single PR plus a compact review summary. Used by note URL
+ * preview blocks to render `https://github.com/<owner>/<repo>/pull/<n>`
+ * pastes as live cards.
+ */
+export async function getGitHubPR(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  draft: boolean;
+  merged: boolean;
+  mergeable: boolean | null;
+  author: { login: string; avatarUrl: string } | null;
+  htmlUrl: string;
+  additions: number;
+  deletions: number;
+  reviews: Array<{ user: string; state: string }>;
+}> {
+  const [pr, reviews] = await Promise.all([
+    octokit.rest.pulls.get({ owner, repo, pull_number: number }),
+    octokit.rest.pulls.listReviews({ owner, repo, pull_number: number, per_page: 30 }),
+  ]);
+  const data = pr.data;
+  return {
+    number: data.number,
+    title: data.title,
+    state: data.state as "open" | "closed",
+    draft: data.draft ?? false,
+    merged: !!data.merged,
+    mergeable: data.mergeable ?? null,
+    author: data.user
+      ? { login: data.user.login, avatarUrl: data.user.avatar_url }
+      : null,
+    htmlUrl: data.html_url,
+    additions: data.additions ?? 0,
+    deletions: data.deletions ?? 0,
+    reviews: reviews.data.map((r) => ({
+      user: r.user?.login ?? "",
+      state: r.state ?? "",
+    })),
+  };
+}
+
+/**
  * Add a comment to a GitHub issue or PR.
  */
 export async function addGitHubComment(

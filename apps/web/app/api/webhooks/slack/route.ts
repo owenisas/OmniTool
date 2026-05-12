@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { handleSlackMention } from "@/lib/slack/mention-handler";
 
 /**
  * Verify a Slack request signature (HMAC-SHA256).
@@ -100,17 +101,55 @@ export async function POST(req: Request) {
   if (eventType === "event_callback") {
     const event = payload.event as Record<string, unknown> | undefined;
     const eventSubtype = event?.type as string | undefined;
+    const slackTeamId = payload.team_id as string | undefined;
 
     console.log(
       `[Slack Webhook] event_callback: ${eventSubtype ?? "unknown"}`,
       {
-        team_id: payload.team_id,
+        team_id: slackTeamId,
         event_id: payload.event_id,
       },
     );
 
-    // TODO: dispatch to event-specific handlers as they're implemented
-    // (e.g., message, app_mention, reaction_added)
+    // Dispatch app_mention + DM events to the mention handler.
+    // We respond OK fast and run the handler in the background — Slack
+    // requires a reply within 3 seconds and retries on non-2xx.
+    if (
+      (eventSubtype === "app_mention" || eventSubtype === "message") &&
+      event &&
+      slackTeamId
+    ) {
+      const channel = event.channel as string | undefined;
+      const ts = event.ts as string | undefined;
+      const threadTs = (event.thread_ts as string | undefined) ?? ts;
+      const slackUserId = event.user as string | undefined;
+      const text = event.text as string | undefined;
+      const subtype = event.subtype as string | undefined;
+
+      // Skip bot messages and edits to avoid loops.
+      if (
+        channel &&
+        ts &&
+        threadTs &&
+        slackUserId &&
+        text &&
+        subtype !== "bot_message" &&
+        subtype !== "message_changed" &&
+        !event.bot_id
+      ) {
+        // Fire-and-forget; failures are logged but don't bubble back to
+        // Slack (it would retry).
+        void handleSlackMention({
+          rawText: text,
+          channel,
+          threadTs,
+          slackUserId,
+          slackTeamId,
+        }).catch((err) => {
+          console.error("[slack-mention] handler error:", err);
+        });
+      }
+    }
   } else {
     console.log(`[Slack Webhook] Unhandled type: ${eventType ?? "unknown"}`);
   }

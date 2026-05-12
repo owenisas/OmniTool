@@ -53,6 +53,7 @@ supabase/.temp/
 
 # playwright MCP logs
 .playwright-mcp/
+.playwright-cli/
 
 # debug inspection scripts
 packages/database/inspect-*.mjs

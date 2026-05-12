@@ -14,6 +14,7 @@ export {
   createGitHubIssue,
   updateGitHubIssue,
   addGitHubComment,
+  getGitHubPR,
 } from "./providers/github";
 export {
   createNotionClient,
@@ -25,9 +26,12 @@ export {
   notionBlocksToMarkdown,
   listNotionPages,
   getNotionParentPageId,
+  createNotionPage,
+  appendNotionBlock,
 } from "./providers/notion";
 export {
   createSlackClient,
+  createSlackClientFromToken,
   sendSlackMessage,
   sendBlockKitMessage,
   listSlackChannels,

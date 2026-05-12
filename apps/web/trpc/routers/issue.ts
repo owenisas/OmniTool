@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   createTRPCRouter,
   protectedProcedure,
   teamProtectedProcedure,
+  assertTeamMembership,
 } from "../init";
 import { createIssueSchema, updateIssueSchema } from "@omnitool/shared/validators";
 import { emitActivityEvent } from "@/lib/activity/emit";
@@ -224,6 +226,15 @@ export const issueRouter = createTRPCRouter({
   listByProject: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
+      const project = await ctx.prisma.project.findUnique({
+        where: { id: input.projectId },
+        select: { teamId: true },
+      });
+      if (!project) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
+
       return ctx.prisma.issue.findMany({
         where: { projectId: input.projectId },
         include: {
@@ -239,7 +250,7 @@ export const issueRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.issue.findUnique({
+      const issue = await ctx.prisma.issue.findUnique({
         where: { id: input.id },
         include: {
           assignee: true,
@@ -252,6 +263,11 @@ export const issueRouter = createTRPCRouter({
           },
         },
       });
+      if (!issue) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, issue.project.teamId);
+      return issue;
     }),
 
   create: protectedProcedure
@@ -260,7 +276,10 @@ export const issueRouter = createTRPCRouter({
       const project = await ctx.prisma.project.findUnique({
         where: { id: input.projectId },
       });
-      if (!project) throw new Error("Project not found");
+      if (!project) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
 
       const count = await ctx.prisma.issue.count({
         where: { projectId: input.projectId },
@@ -315,6 +334,19 @@ export const issueRouter = createTRPCRouter({
     .input(updateIssueSchema)
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const existing = await ctx.prisma.issue.findUnique({
+        where: { id },
+        select: { project: { select: { teamId: true } } },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        existing.project.teamId,
+      );
+
       const issue = await ctx.prisma.issue.update({
         where: { id },
         data: {
@@ -387,21 +419,13 @@ export const issueRouter = createTRPCRouter({
         include: { project: { select: { teamId: true } } },
       });
       if (!issue) {
-        throw new Error("Issue not found");
+        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found" });
       }
-
-      // Check the user is a member of the project's team
-      const membership = await ctx.prisma.teamMember.findUnique({
-        where: {
-          userId_teamId: {
-            userId: ctx.userId,
-            teamId: issue.project.teamId,
-          },
-        },
-      });
-      if (!membership) {
-        throw new Error("Not a member of this issue's team");
-      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        issue.project.teamId,
+      );
 
       // Check no other OmniTool issue is already linked to this GitHub issue
       const existingLink = await ctx.prisma.issue.findFirst({
@@ -413,9 +437,10 @@ export const issueRouter = createTRPCRouter({
         select: { id: true, identifier: true },
       });
       if (existingLink) {
-        throw new Error(
-          `GitHub issue #${input.githubIssueNumber} is already linked to ${existingLink.identifier}`
-        );
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `GitHub issue #${input.githubIssueNumber} is already linked to ${existingLink.identifier}`,
+        });
       }
 
       // Optionally verify the GitHub issue exists (best-effort, don't block on failure)

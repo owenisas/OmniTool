@@ -4,7 +4,7 @@ import { notesAgentConfig } from "@omnitool/ai/agents";
 import { notesChatSystemPrompt } from "@omnitool/ai/prompts";
 import { createNotesChatTools } from "@omnitool/ai";
 import { prisma } from "@omnitool/database";
-import { streamText } from "ai";
+import { stepCountIs, streamText } from "ai";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -129,9 +129,9 @@ export async function POST(req: Request) {
       system,
       messages,
       tools,
-      maxSteps: notesAgentConfig.maxSteps,
+      stopWhen: stepCountIs(notesAgentConfig.maxSteps),
       temperature: 0.3,
-      onFinish: async ({ text, toolCalls, toolResults, usage }) => {
+      onFinish: async ({ text, toolCalls, toolResults, totalUsage }) => {
         const content =
           text?.trim() ||
           "I executed the requested tools. Ask if you need more details.";
@@ -152,7 +152,7 @@ export async function POST(req: Request) {
             content,
             toolCalls: toolCallsJson,
             toolResults: toolResultsJson,
-            tokenCount: usage?.totalTokens ?? null,
+            tokenCount: totalUsage.totalTokens ?? null,
           },
         });
 
@@ -163,7 +163,7 @@ export async function POST(req: Request) {
       },
     });
 
-    return result.toDataStreamResponse({
+    return result.toTextStreamResponse({
       headers: {
         "X-Conversation-Id": conversationId,
       },

@@ -11,11 +11,11 @@
     "./utils": "./src/utils/index.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.2.0",
+    "@ai-sdk/anthropic": "^2.0.16",
     "@blocknote/core": "^0.49.0",
     "@mozilla/readability": "^0.6.0",
     "@omnitool/database": "workspace:*",
-    "ai": "^4.3.0",
+    "ai": "^5.0.52",
     "linkedom": "^0.18.12",
     "zod": "^3.24.0"
   },

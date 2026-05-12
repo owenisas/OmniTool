@@ -90,6 +90,32 @@ for (const envFile of envFiles) {
   }
 }
 
+// ── Step 2d: Verify server.env is NOT inside the bundled subtree ──────────
+// `tauri.conf.json` bundles only `resources/server/` (not the parent
+// `resources/` dir). That keeps `apps/desktop/src-tauri/resources/server.env`
+// — which contains real secrets (INTEGRATION_ENCRYPTION_KEY, AUTH_SECRET,
+// GITHUB_CLIENT_SECRET, DATABASE_URL) — outside the DMG. Production secrets
+// must be provisioned per-machine into
+// `~/Library/Application Support/dev.omnitool.app/server.env`
+// via `scripts/desktop-install-env.sh`.
+//
+// The check below catches accidental drift if anyone moves server.env into
+// the bundled subtree or relaxes the `resources` glob in tauri.conf.json.
+const accidentallyBundled = [
+  path.join(resourceDir, "server.env"),
+  path.join(resourceDir, ".env"),
+  path.join(resourceDir, ".env.local"),
+  path.join(resourceDir, ".env.production"),
+];
+for (const f of accidentallyBundled) {
+  if (fs.existsSync(f)) {
+    console.error(
+      `[desktop-build] FATAL: ${path.relative(root, f)} is inside the bundle — secrets would ship in the DMG. Move it out of resources/server/.`,
+    );
+    process.exit(1);
+  }
+}
+
 console.log("[desktop-build] Server resources ready.");
 
 // ── Step 3: Ensure Node.js binary exists for current platform ───────────────

@@ -73,7 +73,6 @@ export function AskAIToolbarButton({ editor }: { editor: AnyEditor }) {
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buf = "";
       let acc = "";
       let lastParse = 0;
 
@@ -95,18 +94,7 @@ export function AskAIToolbarButton({ editor }: { editor: AnyEditor }) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("0:")) continue;
-          try {
-            const text = JSON.parse(line.slice(2));
-            if (typeof text === "string") acc += text;
-          } catch {
-            /* skip */
-          }
-        }
+        acc += decoder.decode(value, { stream: true });
         apply();
       }
       apply(true);

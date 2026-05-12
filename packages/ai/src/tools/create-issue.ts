@@ -6,7 +6,7 @@ export function makeCreateIssueTool(reporterUserId: string) {
   return tool({
     description:
       "Create a new issue in a project. Use when the user asks to file a bug or create an issue.",
-    parameters: z.object({
+    inputSchema: z.object({
       title: z.string().describe("Issue title"),
       description: z.string().optional().describe("Issue description"),
       projectSlug: z.string().describe("Project slug"),
@@ -24,11 +24,14 @@ export function makeCreateIssueTool(reporterUserId: string) {
       priority,
       severity,
     }) => {
-      const project = await prisma.project.findUnique({
-        where: { slug: projectSlug },
+      const project = await prisma.project.findFirst({
+        where: {
+          slug: projectSlug,
+          team: { members: { some: { userId: reporterUserId } } },
+        },
       });
       if (!project)
-        return { error: `Project '${projectSlug}' not found` };
+        return { error: `Project '${projectSlug}' not found or not accessible` };
 
       const issueCount = await prisma.issue.count({
         where: { projectId: project.id },

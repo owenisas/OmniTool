@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   createTRPCRouter,
   protectedProcedure,
   teamProtectedProcedure,
+  assertTeamMembership,
 } from "../init";
 import { createTaskSchema, updateTaskSchema, moveTaskSchema } from "@omnitool/shared/validators";
 import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
@@ -52,6 +54,15 @@ export const taskRouter = createTRPCRouter({
   listByProject: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
+      const project = await ctx.prisma.project.findUnique({
+        where: { id: input.projectId },
+        select: { teamId: true },
+      });
+      if (!project) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
+
       return ctx.prisma.task.findMany({
         where: { projectId: input.projectId },
         include: {
@@ -66,7 +77,7 @@ export const taskRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.task.findUnique({
+      const task = await ctx.prisma.task.findUnique({
         where: { id: input.id },
         include: {
           assignee: true,
@@ -84,11 +95,25 @@ export const taskRouter = createTRPCRouter({
           },
         },
       });
+      if (!task) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, task.project.teamId);
+      return task;
     }),
 
   create: protectedProcedure
     .input(createTaskSchema)
     .mutation(async ({ ctx, input }) => {
+      const project = await ctx.prisma.project.findUnique({
+        where: { id: input.projectId },
+        select: { teamId: true },
+      });
+      if (!project) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
+
       const task = await ctx.prisma.task.create({
         data: {
           ...input,
@@ -96,11 +121,10 @@ export const taskRouter = createTRPCRouter({
         },
       });
 
-      const teamId = await getProjectTeamId(input.projectId);
       emitActivityEvent({
         type: "task.created",
         actorId: ctx.userId,
-        teamId: teamId ?? undefined,
+        teamId: project.teamId,
         projectId: input.projectId,
         subjectType: "task",
         subjectId: task.id,
@@ -114,6 +138,19 @@ export const taskRouter = createTRPCRouter({
     .input(updateTaskSchema)
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const existing = await ctx.prisma.task.findUnique({
+        where: { id },
+        select: { project: { select: { teamId: true } } },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        existing.project.teamId,
+      );
+
       const task = await ctx.prisma.task.update({
         where: { id },
         data: {
@@ -144,6 +181,19 @@ export const taskRouter = createTRPCRouter({
   move: protectedProcedure
     .input(moveTaskSchema)
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.task.findUnique({
+        where: { id: input.id },
+        select: { project: { select: { teamId: true } } },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        existing.project.teamId,
+      );
+
       const task = await ctx.prisma.task.update({
         where: { id: input.id },
         data: {
@@ -171,6 +221,19 @@ export const taskRouter = createTRPCRouter({
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.task.findUnique({
+        where: { id: input.id },
+        select: { project: { select: { teamId: true } } },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        existing.project.teamId,
+      );
+
       const task = await ctx.prisma.task.delete({ where: { id: input.id } });
 
       const teamId = await getProjectTeamId(task.projectId);

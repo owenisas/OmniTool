@@ -48,6 +48,12 @@ interface NotionPage {
   alreadyImported: boolean;
 }
 
+interface NotionImportResult {
+  imported: number;
+  skipped: number;
+  failed: number;
+}
+
 export function NotionImportDialog({
   open,
   onOpenChange,
@@ -58,6 +64,8 @@ export function NotionImportDialog({
   const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [targetTeamId, setTargetTeamId] = useState<string | null>(null);
+  const [listCursor, setListCursor] = useState<string | undefined>(undefined);
+  const [loadedPages, setLoadedPages] = useState<NotionPage[]>([]);
 
   const utils = trpc.useUtils();
   const importMutation = trpc.integration.notion.importPages.useMutation();
@@ -97,8 +105,21 @@ export function NotionImportDialog({
       setSearchTerm("");
       setDebouncedSearch("");
       setTargetTeamId(null);
+      setListCursor(undefined);
+      setLoadedPages([]);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadedPages([]);
+    setListCursor(undefined);
+  }, [open, targetTeamId, debouncedSearch]);
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedPageIds(new Set());
+  }, [open, targetTeamId]);
 
   // Debounce search input by 300ms
   useEffect(() => {
@@ -110,29 +131,72 @@ export function NotionImportDialog({
 
   // List pages (no search)
   const listPagesQuery = trpc.integration.notion.listPages.useQuery(
-    undefined,
-    { enabled: open && debouncedSearch === "" },
+    { cursor: listCursor, teamId: targetTeamId ?? undefined },
+    { enabled: open && debouncedSearch === "" && !!targetTeamId },
   );
 
   // Search pages
   const searchPagesQuery = trpc.integration.notion.searchPages.useQuery(
-    { query: debouncedSearch },
-    { enabled: open && debouncedSearch !== "" },
+    { query: debouncedSearch, teamId: targetTeamId ?? undefined },
+    { enabled: open && debouncedSearch !== "" && !!targetTeamId },
   );
 
   const isSearching = debouncedSearch !== "";
   const activeQuery = isSearching ? searchPagesQuery : listPagesQuery;
-  const pages: NotionPage[] = activeQuery.data?.pages ?? [];
+  const pages: NotionPage[] = isSearching
+    ? (searchPagesQuery.data?.pages ?? [])
+    : loadedPages;
+  const isPageLoading =
+    activeQuery.isLoading ||
+    (open && !targetTeamId && teamspacesQuery.isLoading);
 
-  // Pre-select all non-imported pages when data loads
+  // Accumulate list pages as the user paginates. New, non-imported pages are
+  // selected by default; existing user choices are preserved on later pages.
   useEffect(() => {
-    if (activeQuery.data && !isSearching) {
-      const selectableIds = activeQuery.data.pages
-        .filter((p: NotionPage) => !p.alreadyImported)
-        .map((p: NotionPage) => p.id);
-      setSelectedPageIds(new Set(selectableIds));
-    }
-  }, [activeQuery.data, isSearching]);
+    if (!open || isSearching || !listPagesQuery.data) return;
+
+    const incoming = listPagesQuery.data.pages;
+    setLoadedPages((prev) => {
+      if (!listCursor) return incoming;
+      const byId = new Map(prev.map((page) => [page.id, page]));
+      for (const page of incoming) byId.set(page.id, page);
+      return Array.from(byId.values());
+    });
+
+    setSelectedPageIds((prev) => {
+      const next = listCursor ? new Set(prev) : new Set<string>();
+      for (const page of incoming) {
+        if (!page.alreadyImported) next.add(page.id);
+      }
+      return next;
+    });
+  }, [open, isSearching, listCursor, listPagesQuery.data]);
+
+  useEffect(() => {
+    if (!open || !isSearching || !searchPagesQuery.data) return;
+    setSelectedPageIds((prev) => {
+      const next = new Set(prev);
+      for (const page of searchPagesQuery.data.pages) {
+        if (
+          !page.alreadyImported &&
+          !loadedPages.some((p) => p.id === page.id)
+        ) {
+          next.add(page.id);
+        }
+      }
+      return next;
+    });
+  }, [open, isSearching, searchPagesQuery.data, loadedPages]);
+
+  const handleLoadMore = useCallback(() => {
+    const nextCursor = listPagesQuery.data?.nextCursor ?? undefined;
+    if (!nextCursor || listPagesQuery.isFetching) return;
+    setListCursor(nextCursor);
+  }, [listPagesQuery.data?.nextCursor, listPagesQuery.isFetching]);
+
+  const hasMorePages =
+    !isSearching &&
+    Boolean(listPagesQuery.data?.hasMore && listPagesQuery.data.nextCursor);
 
   const selectablePages = useMemo(
     () => pages.filter((p) => !p.alreadyImported),
@@ -178,8 +242,10 @@ export function NotionImportDialog({
       kind: "notion-import",
       label: `Importing ${ids.length} Notion ${ids.length === 1 ? "page" : "pages"}`,
       href: "/notes",
-      successToast: (r: { imported: number; skipped: number }) =>
-        `Notion import complete — ${r.imported} imported, ${r.skipped} skipped`,
+      successToast: (r: NotionImportResult) =>
+        `Notion import complete — ${r.imported} imported, ${r.skipped} skipped${
+          r.failed > 0 ? `, ${r.failed} failed` : ""
+        }`,
       work: () =>
         importMutation.mutateAsync({
           selectedPageIds: ids,
@@ -187,6 +253,8 @@ export function NotionImportDialog({
         }),
       onSuccess: () => {
         void utils.note.list.invalidate();
+        void utils.integration.notion.listPages.invalidate();
+        void utils.integration.notion.searchPages.invalidate();
         // Switch the user's active teamspace lens to the import target so
         // they land on their imports without an extra click.
         if (targetTeamId) {
@@ -284,7 +352,7 @@ export function NotionImportDialog({
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-2 py-2">
-          {activeQuery.isLoading && (
+          {isPageLoading && (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               <span className="ml-2 text-sm text-muted-foreground">
@@ -302,7 +370,7 @@ export function NotionImportDialog({
             </div>
           )}
 
-          {activeQuery.isSuccess && pages.length === 0 && (
+          {activeQuery.isSuccess && pages.length === 0 && !isPageLoading && (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <BookOpen className="h-8 w-8 mb-3" />
               <p className="text-sm">
@@ -318,16 +386,15 @@ export function NotionImportDialog({
               <div className="flex items-center justify-between mb-1">
                 <h4 className="text-sm font-semibold flex items-center gap-2">
                   <FileText className="h-4 w-4" />
-                  Pages ({pages.length})
+                  Pages ({pages.length}
+                  {hasMorePages ? "+" : ""})
                 </h4>
                 {selectablePages.length > 0 && (
                   <Button
                     variant="ghost"
                     size="sm"
                     className="text-xs h-7"
-                    onClick={
-                      allSelected ? handleDeselectAll : handleSelectAll
-                    }
+                    onClick={allSelected ? handleDeselectAll : handleSelectAll}
                   >
                     {allSelected ? "Deselect All" : "Select All"}
                   </Button>
@@ -337,8 +404,7 @@ export function NotionImportDialog({
               <div className="space-y-1 max-h-[340px] overflow-y-auto rounded-md border p-1">
                 {pages.map((page) => {
                   const isImported = page.alreadyImported;
-                  const isChecked =
-                    isImported || selectedPageIds.has(page.id);
+                  const isChecked = isImported || selectedPageIds.has(page.id);
 
                   return (
                     <label
@@ -382,6 +448,26 @@ export function NotionImportDialog({
                   );
                 })}
               </div>
+              {hasMorePages && (
+                <div className="flex justify-center pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleLoadMore}
+                    disabled={listPagesQuery.isFetching}
+                  >
+                    {listPagesQuery.isFetching ? (
+                      <>
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      "Load more"
+                    )}
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -402,8 +488,8 @@ export function NotionImportDialog({
                     : undefined
                 }
               >
-                Import {selectedCount}{" "}
-                {selectedCount === 1 ? "page" : "pages"} in background
+                Import {selectedCount} {selectedCount === 1 ? "page" : "pages"}{" "}
+                in background
               </Button>
             </DialogFooter>
           </>

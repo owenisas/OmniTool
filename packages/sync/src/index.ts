@@ -28,16 +28,6 @@ export const serverOnlyTables = [
 export type SyncableTable = (typeof syncableTables)[number];
 export type ServerOnlyTable = (typeof serverOnlyTables)[number];
 
-export const syncConflictPolicies = {
-  tasks: "server_validated_last_write_wins",
-  issues: "server_validated_last_write_wins",
-  notes: "server_validated_last_write_wins",
-  time_entries: "server_validated_last_write_wins",
-  projects: "server_authoritative",
-  teams: "server_authoritative",
-  team_members: "server_authoritative",
-} as const;
-
 export const syncBootstrapSchema = z.object({
   userId: z.string().min(1),
   activeTeamId: z.string().min(1).nullable(),

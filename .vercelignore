@@ -6,6 +6,8 @@ target
 apps/desktop/src-tauri/target
 .git
 .env
+.env.*
+!.env.example
 .env.local
 .env.production
 *.tsbuildinfo

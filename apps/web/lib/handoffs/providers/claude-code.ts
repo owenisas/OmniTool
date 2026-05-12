@@ -26,10 +26,9 @@ export interface ClaudeCodeTaskStatus {
 /**
  * Submit a task to Claude Code.
  *
- * Currently operates in "prompt generation" mode — creates a structured
- * prompt that the user can pipe to their local Claude Code session.
- * When Anthropic's remote agent API becomes available, this will
- * submit programmatically.
+ * Operates in "prompt generation" mode: returns a structured prompt the
+ * user can paste into their local Claude Code session. Polling later
+ * relies on manual status updates from the user (see pollClaudeCodeTask).
  */
 export async function submitToClaudeCode(opts: {
   prompt: string;
@@ -37,34 +36,10 @@ export async function submitToClaudeCode(opts: {
   branch?: string;
   handoffId: string;
 }): Promise<ClaudeCodeSubmitResult> {
-  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
-
-  // Check if remote agent API is available (future)
-  if (anthropicKey && process.env.CLAUDE_CODE_AGENT_API === "true") {
-    return submitRemote(opts, anthropicKey);
-  }
-
-  // Local mode — generate prompt file for manual execution
   return {
     taskId: `local-${opts.handoffId}`,
     status: "awaiting_local_execution",
-    promptFile: opts.prompt, // The formatted prompt is the deliverable
-  };
-}
-
-/**
- * Remote submission via Anthropic agent API (placeholder for future API).
- */
-async function submitRemote(
-  opts: { prompt: string; repo: string; branch?: string; handoffId: string },
-  apiKey: string
-): Promise<ClaudeCodeSubmitResult> {
-  // TODO: When Anthropic's agent API is live, submit here
-  // For now, fall back to local mode
-  console.log("[ClaudeCode] Remote API not yet available, using local mode");
-  return {
-    taskId: `local-${opts.handoffId}`,
-    status: "awaiting_local_execution",
+    promptFile: opts.prompt,
   };
 }
 

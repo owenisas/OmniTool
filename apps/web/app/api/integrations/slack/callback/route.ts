@@ -7,6 +7,33 @@ import {
   verifyDesktopOAuthState,
 } from "@/lib/oauth-state";
 import { desktopOAuthCompletePage } from "@/lib/oauth-complete-page";
+import { getActiveTeamFromCookie } from "@/lib/team-cookie";
+
+async function resolveInstallWorkspaceId(
+  userId: string,
+  cookieHeader: string | null,
+): Promise<string | null> {
+  const cookieTeamId = getActiveTeamFromCookie(cookieHeader);
+  if (cookieTeamId) {
+    const membership = await prisma.teamMember.findUnique({
+      where: {
+        userId_teamId: {
+          userId,
+          teamId: cookieTeamId,
+        },
+      },
+      select: { teamId: true },
+    });
+    if (membership) return membership.teamId;
+  }
+
+  const fallback = await prisma.teamMember.findFirst({
+    where: { userId },
+    orderBy: { joinedAt: "asc" },
+    select: { teamId: true },
+  });
+  return fallback?.teamId ?? null;
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -113,7 +140,12 @@ export async function GET(request: NextRequest) {
       team_name: teamName,
       team_id: teamId,
       bot_user_id: botUserId || authedUserId || null,
+      authed_user_id: authedUserId || null,
     });
+    const workspaceId = await resolveInstallWorkspaceId(
+      userId,
+      request.headers.get("cookie"),
+    );
 
     await prisma.connectedAccount.upsert({
       where: {
@@ -141,6 +173,45 @@ export async function GET(request: NextRequest) {
         metadata,
       },
     });
+
+    // Upsert workspace-level install record so inbound webhooks can resolve
+    // `payload.team_id` to the bot token without scanning ConnectedAccount.
+    if (teamId && botUserId) {
+      await prisma.slackTeamInstall.upsert({
+        where: { teamId: String(teamId) },
+        update: {
+          teamName: teamName ?? "Unnamed workspace",
+          botUserId: String(botUserId),
+          encryptedBotToken: encryptedToken,
+          installerUserId: userId,
+          workspaceId,
+        },
+        create: {
+          teamId: String(teamId),
+          teamName: teamName ?? "Unnamed workspace",
+          botUserId: String(botUserId),
+          encryptedBotToken: encryptedToken,
+          installerUserId: userId,
+          workspaceId,
+        },
+      });
+    }
+
+    // Best-effort: link the installing OmniTool user's slackUserId so the
+    // bot recognizes them when they @-mention OmniTool. Does not overwrite
+    // an existing mapping for a different user.
+    if (authedUserId) {
+      await prisma.user
+        .update({
+          where: { id: userId },
+          data: { slackUserId: String(authedUserId) },
+        })
+        .catch(() => {
+          // Race / unique conflict is non-fatal here — another OmniTool
+          // user already claimed this Slack id; let them resolve it via
+          // the Settings UI.
+        });
+    }
 
     // Desktop flow: show page with deep link + manual "Open" button.
     // Web flow: redirect to integrations page.

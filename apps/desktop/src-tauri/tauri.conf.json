@@ -35,7 +35,7 @@
     "category": "Productivity",
     "shortDescription": "Internal productivity and performance tracking app",
     "longDescription": "OmniTool is an internal app for performance tracking, issue tracking, notes, and AI agents.",
-    "resources": ["resources/"]
+    "resources": ["resources/server/"]
   },
   "plugins": {
     "updater": {

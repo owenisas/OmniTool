@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { encrypt } from "@omnitool/integrations";
+import { encrypt, providerRegistry } from "@omnitool/integrations";
 import { prisma } from "@omnitool/database";
 import {
   isDesktopOAuthState,
@@ -57,23 +57,28 @@ export async function GET(request: NextRequest) {
   try {
     // Exchange code for access token — include redirect_uri so GitHub
     // validates the callback origin matches the authorize request.
+    // Token + API base URLs are sourced from `providerRegistry` so test envs
+    // can redirect them to a local mock via `GITHUB_OAUTH_BASE_URL` /
+    // `GITHUB_API_BASE_URL`.
     const redirectUri = `${process.env.AUTH_URL}/api/integrations/github/callback`;
-    const tokenResponse = await fetch(
-      "https://github.com/login/oauth/access_token",
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          client_id: process.env.GITHUB_CLIENT_ID,
-          client_secret: process.env.GITHUB_CLIENT_SECRET,
-          code,
-          redirect_uri: redirectUri,
-        }),
+    const githubProvider = providerRegistry.get("GITHUB");
+    if (!githubProvider) {
+      throw new Error("GitHub provider not configured");
+    }
+    const apiBase = process.env.GITHUB_API_BASE_URL ?? "https://api.github.com";
+    const tokenResponse = await fetch(githubProvider.tokenUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
       },
-    );
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_CLIENT_ID,
+        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: redirectUri,
+      }),
+    });
 
     const tokenData = await tokenResponse.json();
     if (tokenData.error) {
@@ -102,7 +107,7 @@ export async function GET(request: NextRequest) {
       : null;
 
     // Fetch GitHub user profile
-    const userResponse = await fetch("https://api.github.com/user", {
+    const userResponse = await fetch(`${apiBase}/user`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const ghUser = await userResponse.json();

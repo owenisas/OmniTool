@@ -7,6 +7,16 @@ export async function createSlackClient(userId: string): Promise<WebClient> {
   return new WebClient(token);
 }
 
+/**
+ * Construct a Slack WebClient from a raw bot token. Used by the
+ * `@OmniTool` mention handler which already has the workspace's bot token
+ * decrypted from `SlackTeamInstall` and shouldn't go through the
+ * per-user `ConnectedAccount` lookup.
+ */
+export function createSlackClientFromToken(token: string): WebClient {
+  return new WebClient(token);
+}
+
 export async function sendSlackMessage(
   client: WebClient,
   channel: string,

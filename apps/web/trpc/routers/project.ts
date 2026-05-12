@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   createTRPCRouter,
   protectedProcedure,
   teamProtectedProcedure,
+  assertTeamMembership,
 } from "../init";
 import { createProjectSchema, updateProjectSchema } from "@omnitool/shared/validators";
 import {
@@ -25,19 +27,36 @@ export const projectRouter = createTRPCRouter({
   getBySlug: protectedProcedure
     .input(z.object({ slug: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.project.findUnique({
+      const project = await ctx.prisma.project.findUnique({
         where: { slug: input.slug },
         include: {
-          team: { include: { members: { include: { user: true } } } },
+          team: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              members: {
+                select: {
+                  role: true,
+                  user: {
+                    select: { id: true, name: true, avatarUrl: true },
+                  },
+                },
+              },
+            },
+          },
           _count: { select: { tasks: true, issues: true } },
         },
       });
+      if (!project) return null;
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
+      return project;
     }),
 
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.project.findUnique({
+      const project = await ctx.prisma.project.findUnique({
         where: { id: input.id },
         select: {
           id: true,
@@ -47,10 +66,16 @@ export const projectRouter = createTRPCRouter({
           status: true,
           startDate: true,
           targetDate: true,
+          teamId: true,
           team: { select: { id: true, name: true } },
           _count: { select: { tasks: true, issues: true } },
         },
       });
+      if (!project) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, project.teamId);
+      return project;
     }),
 
   create: teamProtectedProcedure
@@ -107,17 +132,17 @@ export const projectRouter = createTRPCRouter({
     .input(updateProjectSchema)
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-
-      // If renaming, conditionally propagate to auto-created linked note title
-      // ONLY when the note is still auto-named (user hasn't customized it).
-      let oldName: string | null = null;
-      if (typeof data.name === "string") {
-        const before = await ctx.prisma.project.findUnique({
-          where: { id },
-          select: { name: true },
-        });
-        oldName = before?.name ?? null;
+      const existing = await ctx.prisma.project.findUnique({
+        where: { id },
+        select: { teamId: true, name: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
       }
+      await assertTeamMembership(ctx.prisma, ctx.userId, existing.teamId);
+
+      const oldName =
+        typeof data.name === "string" ? existing.name : null;
 
       const project = await ctx.prisma.project.update({
         where: { id },
@@ -145,6 +170,14 @@ export const projectRouter = createTRPCRouter({
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.prisma.project.findUnique({
+        where: { id: input.id },
+        select: { teamId: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, existing.teamId);
       return ctx.prisma.project.delete({ where: { id: input.id } });
     }),
 });

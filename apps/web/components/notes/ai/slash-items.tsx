@@ -16,8 +16,10 @@ import {
   ChevronRight,
   FilePlus2,
   FolderKanban,
+  GitPullRequest,
   Globe,
   Hash,
+  Layers,
   ListTodo,
   Sparkles,
   StickyNote,
@@ -204,6 +206,36 @@ export function getNotesSlashItems<
       group: "Basic blocks",
       subtext: "Save a link with preview card",
       icon: <Globe className="h-4 w-4" />,
+    },
+    {
+      title: "Linear issue",
+      onItemClick: () => {
+        const pos = editor.getTextCursorPosition();
+        editor.insertBlocks(
+          [{ type: "linearIssueEmbed" as any }],
+          pos.block,
+          "after",
+        );
+      },
+      aliases: ["linear", "issue", "ticket"],
+      group: "Embed",
+      subtext: "Embed a Linear issue (paste the URL into the placeholder)",
+      icon: <Layers className="h-4 w-4" />,
+    },
+    {
+      title: "GitHub PR",
+      onItemClick: () => {
+        const pos = editor.getTextCursorPosition();
+        editor.insertBlocks(
+          [{ type: "githubPrEmbed" as any }],
+          pos.block,
+          "after",
+        );
+      },
+      aliases: ["github", "pr", "pull-request"],
+      group: "Embed",
+      subtext: "Embed a GitHub pull request (paste the URL into the placeholder)",
+      icon: <GitPullRequest className="h-4 w-4" />,
     },
     ...getDefaultReactSlashMenuItems(editor),
   ];

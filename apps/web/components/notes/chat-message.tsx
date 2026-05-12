@@ -1,9 +1,14 @@
 "use client";
 
 import { Bot, User } from "lucide-react";
-import type { Message } from "ai";
 
-export function ChatMessage({ message }: { message: Message }) {
+export interface NoteChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+}
+
+export function ChatMessage({ message }: { message: NoteChatMessage }) {
   const isUser = message.role === "user";
 
   return (
@@ -27,23 +32,6 @@ export function ChatMessage({ message }: { message: Message }) {
         }`}
       >
         <div className="whitespace-pre-wrap break-words">{message.content}</div>
-        {message.toolInvocations && message.toolInvocations.length > 0 && (
-          <div className="mt-2 space-y-1">
-            {message.toolInvocations.map((invocation, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 text-xs opacity-70"
-              >
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
-                <span>
-                  {invocation.state === "result"
-                    ? `Used ${invocation.toolName}`
-                    : `Running ${invocation.toolName}...`}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

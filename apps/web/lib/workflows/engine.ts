@@ -200,7 +200,7 @@ async function executeAgentStep(
       model: resolved.model,
       system: systemPrompt,
       prompt,
-      maxTokens: 2000,
+      maxOutputTokens: 2000,
     });
 
     return {
@@ -302,6 +302,57 @@ async function executeActionStep(
         },
       });
       return { status: "ok", output: { noteId: note.id } };
+    }
+
+    case "create_notion_page": {
+      try {
+        const { createNotionPage } = await import(
+          "@omnitool/integrations/providers/notion"
+        );
+        const userId = params.userId as string;
+        const result = await createNotionPage(userId, {
+          parentDatabaseId: params.parentDatabaseId as string | undefined,
+          parentPageId: params.parentPageId as string | undefined,
+          title: interpolateTemplate(
+            (params.title as string) || "Workflow Page",
+            context,
+          ),
+          content: interpolateTemplate(
+            (params.content as string) || "",
+            context,
+          ),
+        });
+        return {
+          status: "ok",
+          output: { pageId: result.id, url: result.url },
+        };
+      } catch (err) {
+        return {
+          status: "ok",
+          output: { created: false, error: String(err) },
+        };
+      }
+    }
+
+    case "append_notion_block": {
+      try {
+        const { appendNotionBlock } = await import(
+          "@omnitool/integrations/providers/notion"
+        );
+        const userId = params.userId as string;
+        const pageId = params.pageId as string;
+        const content = interpolateTemplate(
+          (params.content as string) || "",
+          context,
+        );
+        await appendNotionBlock(userId, { pageId, content });
+        return { status: "ok", output: { appended: true, pageId } };
+      } catch (err) {
+        return {
+          status: "ok",
+          output: { appended: false, error: String(err) },
+        };
+      }
     }
 
     default:

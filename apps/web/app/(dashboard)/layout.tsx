@@ -8,6 +8,8 @@ import { MobileDrawer } from "@/components/layout/mobile-drawer";
 import { InvitationBanner } from "@/components/layout/invitation-banner";
 import { CommandPaletteProvider } from "@/components/command-palette/command-palette-provider";
 import { PageTransition } from "@/components/layout/page-transition";
+import { PowerSyncProvider } from "@/components/providers/powersync-provider";
+import { TeamProvider } from "@/components/providers/team-provider";
 
 export default async function DashboardLayout({
   children,
@@ -18,21 +20,25 @@ export default async function DashboardLayout({
   if (!session?.user) redirect("/login");
 
   return (
-    <SidebarProvider>
-      <CommandPaletteProvider>
-        <div className="flex h-screen overflow-hidden">
-          <Sidebar />
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <Topbar />
-            <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
-              <InvitationBanner />
-              <PageTransition>{children}</PageTransition>
-            </main>
-          </div>
-          <MobileNav />
-          <MobileDrawer />
-        </div>
-      </CommandPaletteProvider>
-    </SidebarProvider>
+    <TeamProvider>
+      <PowerSyncProvider>
+        <SidebarProvider>
+          <CommandPaletteProvider>
+            <div className="flex h-screen overflow-hidden">
+              <Sidebar />
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <Topbar />
+                <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
+                  <InvitationBanner />
+                  <PageTransition>{children}</PageTransition>
+                </main>
+              </div>
+              <MobileNav />
+              <MobileDrawer />
+            </div>
+          </CommandPaletteProvider>
+        </SidebarProvider>
+      </PowerSyncProvider>
+    </TeamProvider>
   );
 }

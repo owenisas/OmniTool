@@ -1,9 +1,9 @@
-export { queryTasks } from "./query-tasks";
-export { queryIssues } from "./query-issues";
-export { queryMetrics } from "./query-metrics";
-export { searchNotes } from "./search-notes";
+export { makeQueryTasksTool } from "./query-tasks";
+export { makeQueryIssuesTool } from "./query-issues";
+export { makeQueryMetricsTool } from "./query-metrics";
+export { makeSearchNotesTool } from "./search-notes";
 export { makeCreateIssueTool } from "./create-issue";
-export { updateTask } from "./update-task";
+export { makeUpdateTaskTool } from "./update-task";
 export { createChatTools } from "./create-chat-tools";
 export { createNotesChatTools } from "./create-notes-chat-tools";
 export {

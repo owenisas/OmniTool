@@ -6,7 +6,7 @@ import { Readability } from "@mozilla/readability";
 export const fetchWebPage = tool({
   description:
     "Fetch a web page and extract its readable text content. Use for summarizing articles, reading docs, or researching topics.",
-  parameters: z.object({
+  inputSchema: z.object({
     url: z.string().url().describe("The URL to fetch"),
     maxLength: z
       .number()

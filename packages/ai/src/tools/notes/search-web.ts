@@ -10,7 +10,7 @@ interface SearchResult {
 export const searchWeb = tool({
   description:
     "Search the web for information. Returns results with titles, URLs, and snippets. Use fetchWebPage to read full content of results.",
-  parameters: z.object({
+  inputSchema: z.object({
     query: z
       .string()
       .min(1)

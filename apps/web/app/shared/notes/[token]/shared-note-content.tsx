@@ -1,6 +1,7 @@
 "use client";
 
 import { FileText } from "lucide-react";
+import Link from "next/link";
 
 interface SharedNote {
   id: string;
@@ -24,15 +25,22 @@ interface SharedNote {
 interface InlineContent {
   type: string;
   text?: string;
+  href?: string;
   content?: InlineContent[];
   styles?: Record<string, boolean | string>;
   props?: Record<string, unknown>;
 }
 
+interface TableContent {
+  type: "tableContent";
+  headerRows?: number;
+  rows: { cells: InlineContent[][] }[];
+}
+
 interface Block {
   id?: string;
   type: string;
-  content?: InlineContent[];
+  content?: InlineContent[] | TableContent;
   props?: Record<string, unknown>;
   children?: Block[];
 }
@@ -48,11 +56,12 @@ function renderInlineContent(content: InlineContent[] | undefined): string {
         if (styles.italic) text = `<em>${text}</em>`;
         if (styles.underline) text = `<u>${text}</u>`;
         if (styles.strikethrough) text = `<s>${text}</s>`;
-        if (styles.code) text = `<code class="px-1 py-0.5 rounded bg-muted text-sm font-mono">${text}</code>`;
+        if (styles.code)
+          text = `<code class="px-1 py-0.5 rounded bg-muted text-sm font-mono">${text}</code>`;
         return text;
       }
       if (item.type === "link") {
-        const href = escapeHtml(String(item.props?.url ?? "#"));
+        const href = escapeHtml(String(item.href ?? item.props?.url ?? "#"));
         const inner = renderInlineContent(item.content);
         return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="text-primary underline">${inner}</a>`;
       }
@@ -65,7 +74,8 @@ function renderInlineContent(content: InlineContent[] | undefined): string {
           (item.props as Record<string, unknown>).name ??
           (item.props as Record<string, unknown>).title ??
           "";
-        if (label) return `<span class="text-primary font-medium">${escapeHtml(String(label))}</span>`;
+        if (label)
+          return `<span class="text-primary font-medium">${escapeHtml(String(label))}</span>`;
       }
       return "";
     })
@@ -81,7 +91,10 @@ function escapeHtml(str: string): string {
 }
 
 function renderBlock(block: Block): string {
-  const content = renderInlineContent(block.content);
+  const inlineContent = Array.isArray(block.content)
+    ? block.content
+    : undefined;
+  const content = renderInlineContent(inlineContent);
   const childrenHtml = (block.children ?? []).map(renderBlock).join("");
 
   switch (block.type) {
@@ -122,11 +135,35 @@ function renderBlock(block: Block): string {
       </figure>${childrenHtml}`;
     }
     case "table": {
-      // Tables have rows in children, each row has cells in content
-      return `<div class="overflow-x-auto mb-4"><table class="w-full border-collapse border border-border rounded-md text-sm">${childrenHtml}</table></div>`;
+      const tableContent =
+        block.content &&
+        !Array.isArray(block.content) &&
+        block.content.type === "tableContent"
+          ? block.content
+          : null;
+      const headerRows = tableContent?.headerRows ?? 0;
+      const rowsHtml =
+        tableContent?.rows
+          .map((row, rowIndex) => {
+            const cellTag = rowIndex < headerRows ? "th" : "td";
+            const cellClass =
+              cellTag === "th"
+                ? "border border-border px-3 py-2 text-left font-semibold bg-muted/50"
+                : "border border-border px-3 py-2 align-top";
+            const cellsHtml = row.cells
+              .map(
+                (cell) =>
+                  `<${cellTag} class="${cellClass}">${renderInlineContent(cell)}</${cellTag}>`,
+              )
+              .join("");
+            return `<tr>${cellsHtml}</tr>`;
+          })
+          .join("") ?? childrenHtml;
+
+      return `<div class="overflow-x-auto mb-4"><table class="w-full border-collapse border border-border rounded-md text-sm"><tbody>${rowsHtml}</tbody></table></div>`;
     }
     case "tableRow": {
-      const cells = block.content ?? [];
+      const cells = Array.isArray(block.content) ? block.content : [];
       const cellsHtml = cells
         .map(
           (cell) =>
@@ -194,10 +231,7 @@ function renderBlocks(blocks: unknown): string {
       block.type === "checkListItem";
 
     if (isListItem) {
-      if (
-        listBuffer.length > 0 &&
-        listBuffer[0].type !== block.type
-      ) {
+      if (listBuffer.length > 0 && listBuffer[0].type !== block.type) {
         flushList();
       }
       listBuffer.push({ type: block.type, html: renderBlock(block) });
@@ -230,12 +264,9 @@ export function SharedNoteContent({ note }: { note: SharedNote }) {
             <FileText className="h-4 w-4" />
             <span>Shared from OmniTool</span>
           </div>
-          <a
-            href="/"
-            className="text-sm text-primary hover:underline"
-          >
+          <Link href="/" className="text-sm text-primary hover:underline">
             Open OmniTool
-          </a>
+          </Link>
         </div>
       </header>
 
@@ -244,18 +275,14 @@ export function SharedNoteContent({ note }: { note: SharedNote }) {
         {/* Title */}
         <div className="mb-6">
           <h1 className="text-4xl font-bold tracking-tight flex items-center gap-3">
-            {note.emoji && (
-              <span className="text-4xl">{note.emoji}</span>
-            )}
+            {note.emoji && <span className="text-4xl">{note.emoji}</span>}
             {note.title}
           </h1>
         </div>
 
         {/* Meta */}
         <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground mb-8 pb-4 border-b border-border">
-          {note.author.name && (
-            <span>By {note.author.name}</span>
-          )}
+          {note.author.name && <span>By {note.author.name}</span>}
           <span>Last updated {formattedDate}</span>
           {note.tags.length > 0 && (
             <div className="flex gap-1.5">
@@ -292,9 +319,9 @@ export function SharedNoteContent({ note }: { note: SharedNote }) {
       <footer className="border-t border-border mt-16">
         <div className="mx-auto max-w-3xl px-6 py-6 text-center text-sm text-muted-foreground">
           Shared via{" "}
-          <a href="/" className="text-primary hover:underline">
+          <Link href="/" className="text-primary hover:underline">
             OmniTool
-          </a>
+          </Link>
         </div>
       </footer>
     </div>

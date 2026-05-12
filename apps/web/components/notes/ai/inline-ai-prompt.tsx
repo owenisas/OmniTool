@@ -129,24 +129,11 @@ export function InlineAIPrompt({ editor }: { editor: AnyEditor }) {
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buf = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        // Vercel AI SDK data stream: lines like `0:"chunk"\n` for text deltas.
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("0:")) continue;
-          try {
-            const text = JSON.parse(line.slice(2));
-            if (typeof text === "string") acc += text;
-          } catch {
-            /* skip malformed line */
-          }
-        }
+        acc += decoder.decode(value, { stream: true });
         applyMarkdown();
       }
 

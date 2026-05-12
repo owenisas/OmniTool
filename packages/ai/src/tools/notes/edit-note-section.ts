@@ -9,7 +9,7 @@ export function makeEditNoteSectionTool(userId: string) {
   return tool({
     description:
       "Replace the content under a specific heading. Preserves the heading, replaces all blocks between it and the next same-level heading.",
-    parameters: z.object({
+    inputSchema: z.object({
       noteId: z.string().describe("Target note ID"),
       heading: z
         .string()

@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
+function diagnosticsEnabled(): boolean {
+  return (
+    process.env.NODE_ENV !== "production" ||
+    process.env.OMNITOOL_HEALTH_DIAGNOSTICS === "1"
+  );
+}
+
 /**
  * Diagnostic endpoint. Used by:
  *   - The Tauri splash shell to detect when the sidecar is ready (any 2xx).
@@ -15,6 +22,7 @@ export const dynamic = "force-dynamic";
  * Booleans only — no secrets are returned.
  */
 export async function GET() {
+  const includeDiagnostics = diagnosticsEnabled();
   const env = {
     DATABASE_URL: Boolean(process.env.DATABASE_URL),
     DIRECT_URL: Boolean(process.env.DIRECT_URL),
@@ -36,9 +44,10 @@ export async function GET() {
       status: "healthy",
       timestamp: new Date().toISOString(),
       version: process.env.NEXT_PUBLIC_APP_VERSION || "dev",
-      db: { ok: true, latencyMs: dbLatencyMs },
-      env,
-      missing,
+      db: includeDiagnostics
+        ? { ok: true, latencyMs: dbLatencyMs }
+        : { ok: true },
+      ...(includeDiagnostics ? { env, missing } : {}),
     });
   } catch (err) {
     return NextResponse.json(
@@ -48,10 +57,11 @@ export async function GET() {
         version: process.env.NEXT_PUBLIC_APP_VERSION || "dev",
         db: {
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          ...(includeDiagnostics
+            ? { error: err instanceof Error ? err.message : String(err) }
+            : {}),
         },
-        env,
-        missing,
+        ...(includeDiagnostics ? { env, missing } : {}),
       },
       { status: 503 },
     );

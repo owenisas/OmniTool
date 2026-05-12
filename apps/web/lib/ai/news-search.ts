@@ -115,7 +115,7 @@ Keep it under 500 words. Be opinionated about what's important. Skip fluff artic
     const result = await generateText({
       model: lm.model,
       prompt,
-      maxTokens: 1500,
+      maxOutputTokens: 1500,
     });
 
     // Extract per-article summaries from the synthesis (best-effort)

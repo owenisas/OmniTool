@@ -7,7 +7,7 @@ export function makeOrganizeNoteTool(userId: string) {
   return tool({
     description:
       "Organize a note: rename, pin/unpin, or update tags. For moving notes between parents, use this tool with parentId.",
-    parameters: z.object({
+    inputSchema: z.object({
       noteId: z.string().describe("Note ID to organize"),
       title: z.string().min(1).max(200).optional().describe("New title"),
       isPinned: z.boolean().optional().describe("Pin or unpin"),

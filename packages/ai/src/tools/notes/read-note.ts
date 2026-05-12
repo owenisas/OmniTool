@@ -6,7 +6,7 @@ export function makeReadNoteTool(userId: string) {
   return tool({
     description:
       "Read the full content of a note. Returns title, markdown content, tags, and child notes.",
-    parameters: z.object({
+    inputSchema: z.object({
       noteId: z.string().describe("The note ID to read"),
     }),
     execute: async ({ noteId }) => {

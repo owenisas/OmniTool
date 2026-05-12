@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSyncExternalStore } from "react";
 import { trpc } from "@/trpc/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@omnitool/ui/components/card";
 import { formatDistanceToNow } from "date-fns";
@@ -15,6 +16,34 @@ import {
 } from "lucide-react";
 
 /* ─── Helpers ─────────────────────────────────────────────── */
+
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
+function useHydrated(): boolean {
+  return useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot,
+  );
+}
+
+function RelativeTime({
+  date,
+}: {
+  date: Date | string;
+}) {
+  const hydrated = useHydrated();
+
+  return (
+    <span suppressHydrationWarning>
+      {hydrated
+        ? formatDistanceToNow(new Date(date), { addSuffix: true })
+        : ""}
+    </span>
+  );
+}
 
 function activityLabel(type: string): string {
   const labels: Record<string, string> = {
@@ -137,9 +166,7 @@ function ContinueCard({
                     {lastNote.title || "Untitled"}
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatDistanceToNow(new Date(lastNote.updatedAt), {
-                      addSuffix: true,
-                    })}
+                    <RelativeTime date={lastNote.updatedAt} />
                   </span>
                 </Link>
               </li>
@@ -156,7 +183,11 @@ function ContinueCard({
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {nextTask.dueDate
-                      ? `Due ${formatDistanceToNow(new Date(nextTask.dueDate), { addSuffix: true })}`
+                      ? (
+                          <>
+                            Due <RelativeTime date={nextTask.dueDate} />
+                          </>
+                        )
                       : nextTask.project.name}
                   </span>
                 </Link>
@@ -216,9 +247,7 @@ function RecentActivityCard() {
                     </span>
                   </div>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatDistanceToNow(new Date(event.createdAt), {
-                      addSuffix: true,
-                    })}
+                    <RelativeTime date={event.createdAt} />
                   </span>
                 </li>
               );
@@ -387,9 +416,7 @@ export function DashboardOverview() {
                         {t.dueDate && (
                           <>
                             {" · Due "}
-                            {formatDistanceToNow(new Date(t.dueDate), {
-                              addSuffix: true,
-                            })}
+                            <RelativeTime date={t.dueDate} />
                           </>
                         )}
                       </span>
@@ -436,9 +463,7 @@ export function DashboardOverview() {
                         {n.title}
                       </span>
                       <span className="shrink-0 text-xs text-muted-foreground">
-                        {formatDistanceToNow(new Date(n.updatedAt), {
-                          addSuffix: true,
-                        })}
+                        <RelativeTime date={n.updatedAt} />
                       </span>
                     </Link>
                   </li>

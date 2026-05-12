@@ -83,6 +83,70 @@ jobs:
       - name: Unit tests
         run: pnpm --filter @omnitool/web test
 
+  migration-drift:
+    # Surfaces drift between `packages/database/prisma/schema.prisma` and the
+    # migration history. Currently advisory (continue-on-error) because the
+    # main branch has known drift — `db:push` was used historically. Once a
+    # fresh baseline migration captures the current schema, drop
+    # `continue-on-error` so this becomes a hard gate.
+    name: Migration drift (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: omnitool_shadow
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.27.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Detect schema drift
+        working-directory: packages/database
+        env:
+          SHADOW_URL: "postgresql://postgres:postgres@localhost:5433/omnitool_shadow?schema=public"
+        run: |
+          set +e
+          npx prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url "$SHADOW_URL" \
+            --exit-code
+          status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "Migrations match schema."
+            exit 0
+          elif [ "$status" -eq 2 ]; then
+            echo "::warning::Schema drift detected: prisma/schema.prisma has changes not captured by any migration. Run 'pnpm --filter @omnitool/database exec prisma migrate dev' locally and commit the new migration."
+            exit 1
+          else
+            echo "::error::prisma migrate diff failed with status $status"
+            exit "$status"
+          fi
+
   rust-tests:
     name: Rust unit tests (Tauri shell)
     runs-on: ubuntu-latest
@@ -135,6 +199,14 @@ jobs:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.E2E_SUPABASE_ANON_KEY }}
       ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
       ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      # Layer 4 OAuth E2E points the sidecar's GitHub URLs at the mock harness
+      # so server-side fetches during the callback hit a deterministic
+      # local responder (apps/web/e2e/harness/oauth-mock.ts on :5556).
+      OAUTH_MOCK_PORT: "5556"
+      GITHUB_OAUTH_BASE_URL: "http://localhost:5556"
+      GITHUB_API_BASE_URL: "http://localhost:5556/api"
+      GITHUB_CLIENT_ID: "ci-mock-github-client-id"
+      GITHUB_CLIENT_SECRET: "ci-mock-github-client-secret"
     steps:
       - uses: actions/checkout@v4
 

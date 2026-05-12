@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import type { Prisma } from "@omnitool/database";
-import { createTRPCRouter, protectedProcedure } from "../init";
+import {
+  createTRPCRouter,
+  protectedProcedure,
+  assertTeamMembership,
+} from "../init";
 
 // ─── Input schemas ──────────────────────────────────────────
 
@@ -43,6 +47,7 @@ export const workflowRouter = createTRPCRouter({
       })
     )
     .query(async ({ ctx, input }) => {
+      await assertTeamMembership(ctx.prisma, ctx.userId, input.teamId);
       return ctx.prisma.workflow.findMany({
         where: {
           teamId: input.teamId,
@@ -74,6 +79,7 @@ export const workflowRouter = createTRPCRouter({
       if (!workflow) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
+      await assertTeamMembership(ctx.prisma, ctx.userId, workflow.teamId);
       return workflow;
     }),
 
@@ -91,6 +97,7 @@ export const workflowRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertTeamMembership(ctx.prisma, ctx.userId, input.teamId);
       return ctx.prisma.workflow.create({
         data: {
           teamId: input.teamId,
@@ -142,6 +149,7 @@ export const workflowRouter = createTRPCRouter({
       if (!workflow) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
+      await assertTeamMembership(ctx.prisma, ctx.userId, workflow.teamId);
       if (workflow.status === "active") {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -160,7 +168,7 @@ export const workflowRouter = createTRPCRouter({
               workflowId: input.id,
               position: i,
               kind: step.kind,
-              config: step.config as any,
+              config: step.config as Prisma.InputJsonValue,
               label: step.label,
             })),
           });
@@ -219,6 +227,7 @@ export const workflowRouter = createTRPCRouter({
       if (!wf) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
+      await assertTeamMembership(ctx.prisma, ctx.userId, wf.teamId);
       if (!wf.trigger) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -244,6 +253,14 @@ export const workflowRouter = createTRPCRouter({
   pause: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const wf = await ctx.prisma.workflow.findUnique({
+        where: { id: input.id },
+        select: { teamId: true },
+      });
+      if (!wf) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, wf.teamId);
       return ctx.prisma.workflow.update({
         where: { id: input.id },
         data: { status: "paused" },
@@ -256,6 +273,14 @@ export const workflowRouter = createTRPCRouter({
   delete: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const wf = await ctx.prisma.workflow.findUnique({
+        where: { id: input.id },
+        select: { teamId: true },
+      });
+      if (!wf) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, wf.teamId);
       return ctx.prisma.workflow.update({
         where: { id: input.id },
         data: { status: "archived" },
@@ -266,20 +291,30 @@ export const workflowRouter = createTRPCRouter({
 
   /**
    * List workflow runs with cursor-based pagination.
+   * REQUIRES `workflowId` so we can authorize against the parent workflow's team.
    */
   listRuns: protectedProcedure
     .input(
       z.object({
-        workflowId: z.string().optional(),
+        workflowId: z.string(),
         status: z.string().optional(),
         limit: z.number().min(1).max(50).default(20),
         cursor: z.string().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
+      const wf = await ctx.prisma.workflow.findUnique({
+        where: { id: input.workflowId },
+        select: { teamId: true },
+      });
+      if (!wf) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, wf.teamId);
+
       const runs = await ctx.prisma.workflowRun.findMany({
         where: {
-          ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+          workflowId: input.workflowId,
           ...(input.status ? { status: input.status } : {}),
         },
         include: {
@@ -316,6 +351,11 @@ export const workflowRouter = createTRPCRouter({
       if (!run) {
         throw new TRPCError({ code: "NOT_FOUND" });
       }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        run.workflow.teamId,
+      );
       return run;
     }),
 
@@ -335,7 +375,11 @@ export const workflowRouter = createTRPCRouter({
         where: { id: input.workflowId },
         include: { trigger: true },
       });
-      if (!wf || wf.status !== "active") {
+      if (!wf) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(ctx.prisma, ctx.userId, wf.teamId);
+      if (wf.status !== "active") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Workflow must be active",
@@ -378,8 +422,17 @@ export const workflowRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const run = await ctx.prisma.workflowRun.findUnique({
         where: { id: input.runId },
+        include: { workflow: { select: { teamId: true } } },
       });
-      if (!run || run.status !== "waiting_approval") {
+      if (!run) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        run.workflow.teamId,
+      );
+      if (run.status !== "waiting_approval") {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Run is not awaiting approval",
@@ -419,6 +472,18 @@ export const workflowRouter = createTRPCRouter({
   cancelRun: protectedProcedure
     .input(z.object({ runId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const run = await ctx.prisma.workflowRun.findUnique({
+        where: { id: input.runId },
+        include: { workflow: { select: { teamId: true } } },
+      });
+      if (!run) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      await assertTeamMembership(
+        ctx.prisma,
+        ctx.userId,
+        run.workflow.teamId,
+      );
       return ctx.prisma.workflowRun.update({
         where: { id: input.runId },
         data: { status: "cancelled", completedAt: new Date() },
@@ -448,6 +513,7 @@ export const workflowRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertTeamMembership(ctx.prisma, ctx.userId, input.teamId);
       const { workflowTemplates } = await import(
         "@/lib/workflows/templates"
       );

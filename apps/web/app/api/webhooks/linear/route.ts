@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { prisma } from "@omnitool/database";
+import { emitActivityEvent } from "@/lib/activity/emit";
 
 /**
  * Verify a Linear webhook signature (HMAC-SHA256).
@@ -125,7 +126,9 @@ export async function POST(req: Request) {
     `[Linear Webhook] type=${type} action=${action} id=${data?.id ?? "unknown"}`,
   );
 
-  // Only handle Issue webhooks for now.
+  // Handle Issue + Comment webhooks. Each handler also emits an activity
+  // event so workflow templates can trigger off Linear changes.
+  // (Phase 1a: subjectType reuses "issue" — no Prisma migration needed.)
   if (type === "Issue") {
     try {
       await handleIssueWebhook(action, data);
@@ -133,6 +136,12 @@ export async function POST(req: Request) {
       console.error(`[Linear Webhook] Handler error for Issue.${action}:`, err);
       // Return 200 anyway -- Linear retries on non-2xx and we don't want
       // repeated retries for a processing bug.
+    }
+  } else if (type === "Comment") {
+    try {
+      await handleCommentWebhook(action, data);
+    } catch (err) {
+      console.error(`[Linear Webhook] Handler error for Comment.${action}:`, err);
     }
   }
 
@@ -175,6 +184,20 @@ async function handleIssueWebhook(
           `[Linear Webhook] Issue.create for ${linearIssueId} — no matching OmniTool issue, skipping.`,
         );
       }
+
+      // Emit engine event regardless — workflow templates can react to any
+      // Linear issue creation, not just ones already linked to an OmniTool
+      // issue.
+      await emitActivityEvent({
+        type: "linear.issue.created",
+        actorType: "integration",
+        subjectType: "issue",
+        subjectId: linearIssueId,
+        payload: {
+          ...data,
+          omnitoolIssueId: existingIssue?.id ?? null,
+        },
+      });
       break;
     }
 
@@ -231,6 +254,46 @@ async function handleIssueWebhook(
           `[Linear Webhook] Issue.update applied to ${existingIssue.identifier}: ${Object.keys(updates).join(", ")}`,
         );
       }
+
+      // Emit a more specific event when status transitioned to a closed
+      // state, plus the generic "updated" event. Assignee changes also get
+      // their own event so workflow templates can target them precisely.
+      const isNowClosed =
+        stateData?.type === "completed" || stateData?.type === "cancelled";
+      if (isNowClosed) {
+        await emitActivityEvent({
+          type: "linear.issue.closed",
+          actorType: "integration",
+          subjectType: "issue",
+          subjectId: linearIssueId,
+          payload: {
+            ...data,
+            omnitoolIssueId: existingIssue.id,
+          },
+        });
+      }
+      if (Object.prototype.hasOwnProperty.call(data, "assigneeId")) {
+        await emitActivityEvent({
+          type: "linear.issue.assigned",
+          actorType: "integration",
+          subjectType: "issue",
+          subjectId: linearIssueId,
+          payload: {
+            ...data,
+            omnitoolIssueId: existingIssue.id,
+          },
+        });
+      }
+      await emitActivityEvent({
+        type: "linear.issue.updated",
+        actorType: "integration",
+        subjectType: "issue",
+        subjectId: linearIssueId,
+        payload: {
+          ...data,
+          omnitoolIssueId: existingIssue.id,
+        },
+      });
       break;
     }
 
@@ -250,10 +313,47 @@ async function handleIssueWebhook(
       console.log(
         `[Linear Webhook] Issue.remove — closed ${existingIssue.identifier}`,
       );
+      await emitActivityEvent({
+        type: "linear.issue.closed",
+        actorType: "integration",
+        subjectType: "issue",
+        subjectId: linearIssueId,
+        payload: {
+          ...data,
+          omnitoolIssueId: existingIssue.id,
+          removed: true,
+        },
+      });
       break;
     }
 
     default:
       console.log(`[Linear Webhook] Unhandled Issue action: ${action}`);
   }
+}
+
+async function handleCommentWebhook(
+  action: string,
+  data: Record<string, unknown>,
+) {
+  if (action !== "create") return;
+
+  const issueRef = data.issue as { id?: string } | undefined;
+  const linearIssueId = issueRef?.id;
+  if (!linearIssueId) return;
+
+  const existingIssue = await prisma.issue.findUnique({
+    where: { linearIssueId },
+  });
+
+  await emitActivityEvent({
+    type: "linear.issue.commented",
+    actorType: "integration",
+    subjectType: "issue",
+    subjectId: linearIssueId,
+    payload: {
+      ...data,
+      omnitoolIssueId: existingIssue?.id ?? null,
+    },
+  });
 }

@@ -20,6 +20,9 @@ import { handoffRouter } from "./handoff";
 import { noteTemplateRouter } from "./note-template";
 import { noteShareRouter } from "./note-share";
 import { workflowRouter } from "./workflow";
+import { externalPreviewRouter } from "./external-preview";
+import { slackSettingsRouter } from "./slack-settings";
+import { personalAccessTokenRouter } from "./personal-access-token";
 
 export const appRouter = createTRPCRouter({
   user: userRouter,
@@ -43,6 +46,9 @@ export const appRouter = createTRPCRouter({
   noteTemplate: noteTemplateRouter,
   noteShare: noteShareRouter,
   workflow: workflowRouter,
+  externalPreview: externalPreviewRouter,
+  slackSettings: slackSettingsRouter,
+  personalAccessToken: personalAccessTokenRouter,
 });
 
 export type AppRouter = typeof appRouter;

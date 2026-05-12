@@ -20,7 +20,7 @@ export function makeCreateNoteTool(userId: string) {
   return tool({
     description:
       "Create a new note with a title and optional markdown content.",
-    parameters: z.object({
+    inputSchema: z.object({
       title: z.string().min(1).max(200).describe("Note title"),
       markdown: z
         .string()

@@ -1,4 +1,5 @@
 import { FileX } from "lucide-react";
+import Link from "next/link";
 
 export default function SharedNoteNotFound() {
   return (
@@ -9,12 +10,12 @@ export default function SharedNoteNotFound() {
         This share link may have expired, been revoked, or the note may have
         been deleted.
       </p>
-      <a
+      <Link
         href="/"
         className="text-primary hover:underline text-sm"
       >
         Go to OmniTool
-      </a>
+      </Link>
     </div>
   );
 }

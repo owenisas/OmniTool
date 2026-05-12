@@ -328,6 +328,104 @@ export async function getNotionParentPageId(
   return null;
 }
 
+// ─── Outbound writers (used by workflow engine actions) ─────
+
+/**
+ * Create a Notion page under a parent (database or page) with a title and
+ * optional plain-text body. The body is split into paragraph blocks.
+ *
+ * - When `parentDatabaseId` is set, creates a row in that database with
+ *   the title set on the schema's title property.
+ * - Otherwise `parentPageId` is required: creates a child page with the
+ *   title in the page's `properties.title`.
+ */
+export async function createNotionPage(
+  userId: string,
+  args: {
+    parentDatabaseId?: string;
+    parentPageId?: string;
+    title: string;
+    content?: string;
+  },
+): Promise<{ id: string; url: string }> {
+  const client = await createNotionClient(userId);
+  const { parentDatabaseId, parentPageId, title, content } = args;
+
+  if (!parentDatabaseId && !parentPageId) {
+    throw new Error(
+      "createNotionPage: parentDatabaseId or parentPageId is required",
+    );
+  }
+
+  const parent = parentDatabaseId
+    ? { database_id: parentDatabaseId }
+    : { page_id: parentPageId as string };
+
+  const properties: Record<string, unknown> = parentDatabaseId
+    ? {
+        Name: {
+          title: [{ type: "text", text: { content: title } }],
+        },
+      }
+    : {
+        title: [{ type: "text", text: { content: title } }],
+      };
+
+  const children = content
+    ? content
+        .split(/\n\n+/)
+        .filter((p) => p.trim().length > 0)
+        .map((paragraph) => ({
+          object: "block",
+          type: "paragraph",
+          paragraph: {
+            rich_text: [
+              { type: "text", text: { content: paragraph.slice(0, 2000) } },
+            ],
+          },
+        }))
+    : undefined;
+
+  const page = (await client.pages.create({
+    parent: parent as any,
+    properties: properties as any,
+    children: children as any,
+  })) as any;
+
+  return { id: page.id as string, url: page.url as string };
+}
+
+/**
+ * Append paragraph blocks (split on double newlines) to an existing
+ * Notion page. Each paragraph is capped at 2000 characters per Notion's
+ * rich_text size limit.
+ */
+export async function appendNotionBlock(
+  userId: string,
+  args: { pageId: string; content: string },
+): Promise<void> {
+  const client = await createNotionClient(userId);
+  const blocks = args.content
+    .split(/\n\n+/)
+    .filter((p) => p.trim().length > 0)
+    .map((paragraph) => ({
+      object: "block",
+      type: "paragraph",
+      paragraph: {
+        rich_text: [
+          { type: "text", text: { content: paragraph.slice(0, 2000) } },
+        ],
+      },
+    }));
+
+  if (blocks.length === 0) return;
+
+  await client.blocks.children.append({
+    block_id: args.pageId,
+    children: blocks as any,
+  });
+}
+
 // List all accessible pages (for browsing/import UI)
 export async function listNotionPages(client: Client, cursor?: string) {
   const response = await client.search({

@@ -9,7 +9,7 @@ export function makeAppendToNoteTool(userId: string) {
   return tool({
     description:
       "Append markdown content to a note. Can append at the end or after a specific heading.",
-    parameters: z.object({
+    inputSchema: z.object({
       noteId: z.string().describe("Target note ID"),
       markdown: z
         .string()

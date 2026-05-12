@@ -38,7 +38,21 @@ const providers: Record<string, ProviderConfig> = {
     slug: "slack",
     icon: "message-square",
     description: "Connect Slack to send notifications and create tasks from messages.",
-    scopes: ["chat:write", "channels:read", "commands", "users:read"],
+    // app_mentions:read + im:* added in Phase 3 (interactive @OmniTool):
+    //  - app_mentions:read: receive `app_mention` events when users @-mention
+    //    the bot in any channel.
+    //  - im:history / im:read / im:write: send and receive direct messages
+    //    so the bot can respond in DMs.
+    scopes: [
+      "chat:write",
+      "channels:read",
+      "commands",
+      "users:read",
+      "app_mentions:read",
+      "im:history",
+      "im:read",
+      "im:write",
+    ],
     authUrl: "https://slack.com/oauth/v2/authorize",
     tokenUrl: "https://slack.com/api/oauth.v2.access",
     clientIdEnv: "SLACK_CLIENT_ID",
@@ -57,8 +71,71 @@ const providers: Record<string, ProviderConfig> = {
   },
 };
 
+/**
+ * Apply env-based base-URL overrides to a provider config so OAuth tests
+ * can route github.com / api.notion.com / etc. through a local mock server.
+ *
+ * Recognized env vars (set on the server process; default = upstream URLs):
+ *   GITHUB_OAUTH_BASE_URL — overrides https://github.com in authUrl/tokenUrl
+ *   GITHUB_API_BASE_URL   — overrides https://api.github.com (consumed by callers
+ *                           that fetch the user profile after exchange)
+ *   NOTION_API_BASE_URL   — overrides https://api.notion.com
+ *   SLACK_OAUTH_BASE_URL  — overrides https://slack.com
+ *   SLACK_API_BASE_URL    — overrides https://slack.com/api
+ *   LINEAR_OAUTH_BASE_URL — overrides https://linear.app
+ *   LINEAR_API_BASE_URL   — overrides https://api.linear.app
+ *
+ * Production must leave these unset.
+ */
+function applyBaseUrlOverrides(p: ProviderConfig): ProviderConfig {
+  const swap = (url: string, from: string, to?: string) =>
+    to && url.startsWith(from) ? to + url.slice(from.length) : url;
+
+  switch (p.name) {
+    case "GitHub": {
+      const base = process.env.GITHUB_OAUTH_BASE_URL;
+      return {
+        ...p,
+        authUrl: swap(p.authUrl, "https://github.com", base),
+        tokenUrl: swap(p.tokenUrl, "https://github.com", base),
+      };
+    }
+    case "Notion": {
+      const base = process.env.NOTION_API_BASE_URL;
+      return {
+        ...p,
+        authUrl: swap(p.authUrl, "https://api.notion.com", base),
+        tokenUrl: swap(p.tokenUrl, "https://api.notion.com", base),
+      };
+    }
+    case "Slack": {
+      const oauthBase = process.env.SLACK_OAUTH_BASE_URL;
+      const apiBase = process.env.SLACK_API_BASE_URL;
+      return {
+        ...p,
+        authUrl: swap(p.authUrl, "https://slack.com", oauthBase),
+        tokenUrl: swap(p.tokenUrl, "https://slack.com", apiBase ?? oauthBase),
+      };
+    }
+    case "Linear": {
+      const oauthBase = process.env.LINEAR_OAUTH_BASE_URL;
+      const apiBase = process.env.LINEAR_API_BASE_URL;
+      return {
+        ...p,
+        authUrl: swap(p.authUrl, "https://linear.app", oauthBase),
+        tokenUrl: swap(p.tokenUrl, "https://api.linear.app", apiBase),
+      };
+    }
+    default:
+      return p;
+  }
+}
+
 export const providerRegistry = {
-  get: (provider: string) => providers[provider],
-  getAll: () => Object.values(providers),
+  get: (provider: string) => {
+    const p = providers[provider];
+    return p ? applyBaseUrlOverrides(p) : undefined;
+  },
+  getAll: () => Object.values(providers).map(applyBaseUrlOverrides),
   getAllKeys: () => Object.keys(providers),
 };

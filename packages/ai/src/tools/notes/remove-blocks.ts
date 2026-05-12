@@ -9,7 +9,7 @@ export function makeRemoveBlocksTool(userId: string) {
   return tool({
     description:
       "Remove a section from a note by its heading. Removes the heading and all content until the next same-level heading.",
-    parameters: z.object({
+    inputSchema: z.object({
       noteId: z.string().describe("Target note ID"),
       heading: z
         .string()

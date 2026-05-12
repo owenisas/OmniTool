@@ -40,65 +40,137 @@ function rewriteNotionLinks(
   if (!Array.isArray(blocks)) return { blocks, changed: false };
   let changed = false;
 
-  const NOTION_URL_RE =
-    /https?:\/\/(?:www\.)?notion\.so\/(?:[^/?#]+\/)*([0-9a-f]{32}|[0-9a-f-]{36})(?:[?#].*)?$/i;
   const NOTION_PROTO_RE = /^notion:\/\/page\/([0-9a-f-]{36}|[0-9a-f]{32})$/i;
 
-  function rewriteHref(href: string): string {
+  function mappedId(rawId: string): string | undefined {
+    const lower = rawId.toLowerCase();
+    return idMap.get(lower) ?? idMap.get(lower.replace(/-/g, ""));
+  }
+
+  function extractNotionPageId(href: string): string | null {
     const proto = href.match(NOTION_PROTO_RE);
-    if (proto) {
-      const target = idMap.get(proto[1]!.toLowerCase());
-      if (target) {
-        changed = true;
-        return `/notes/${target}`;
-      }
-      return href;
+    if (proto) return proto[1]!.toLowerCase();
+
+    let url: URL;
+    try {
+      url = new URL(href);
+    } catch {
+      return null;
     }
-    const url = href.match(NOTION_URL_RE);
-    if (url) {
-      const raw = url[1]!.toLowerCase();
-      const target =
-        idMap.get(raw) ?? idMap.get(raw.replace(/-/g, ""));
-      if (target) {
-        changed = true;
-        return `/notes/${target}`;
-      }
+
+    const host = url.hostname.toLowerCase();
+    if (
+      host !== "notion.so" &&
+      host !== "www.notion.so" &&
+      host !== "notion.site" &&
+      !host.endsWith(".notion.site")
+    ) {
+      return null;
+    }
+
+    const segments = url.pathname.split("/").filter(Boolean).reverse();
+    for (const segment of segments) {
+      const decoded = decodeURIComponent(segment);
+      const uuid = decoded.match(
+        /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+      );
+      if (uuid) return uuid[1]!.toLowerCase();
+
+      const raw = decoded.match(/([0-9a-f]{32})$/i);
+      if (raw) return raw[1]!.toLowerCase();
+    }
+
+    return null;
+  }
+
+  function rewriteHref(href: string): string {
+    const notionId = extractNotionPageId(href);
+    const target = notionId ? mappedId(notionId) : undefined;
+    if (target) {
+      changed = true;
+      return `/notes/${target}`;
     }
     return href;
   }
 
-  function walkInline(arr: unknown[]): unknown[] {
-    return arr.map((node) => {
-      if (!node || typeof node !== "object") return node;
-      const n = node as Record<string, unknown>;
-      if (n.type === "link" && typeof n.href === "string") {
-        const newHref = rewriteHref(n.href);
-        if (newHref !== n.href) {
-          return { ...n, href: newHref };
-        }
+  function walkArray(arr: unknown[]): unknown[] {
+    let next: unknown[] | null = null;
+    arr.forEach((item, index) => {
+      const walked = walkValue(item);
+      if (walked !== item) {
+        next ??= arr.slice();
+        next[index] = walked;
       }
-      return n;
     });
+    return next ?? arr;
   }
 
-  function walkBlocks(arr: unknown[]): unknown[] {
-    return arr.map((b) => {
-      if (!b || typeof b !== "object") return b;
-      const block = b as Record<string, unknown>;
-      let next = block;
-      if (Array.isArray(block.content)) {
-        const newContent = walkInline(block.content);
-        next = { ...next, content: newContent };
+  function walkValue(value: unknown): unknown {
+    if (Array.isArray(value)) return walkArray(value);
+    if (!value || typeof value !== "object") return value;
+
+    const node = value as Record<string, unknown>;
+    let next: Record<string, unknown> | null = null;
+
+    if (node.type === "link" && typeof node.href === "string") {
+      const newHref = rewriteHref(node.href);
+      if (newHref !== node.href) {
+        next = { ...node, href: newHref };
       }
-      if (Array.isArray(block.children)) {
-        next = { ...next, children: walkBlocks(block.children) };
+    }
+
+    for (const key of Object.keys(node)) {
+      if (key === "href") continue;
+      const current = node[key];
+      const walked = walkValue(current);
+      if (walked !== current) {
+        next ??= { ...node };
+        next[key] = walked;
       }
-      return next;
-    });
+    }
+
+    return next ?? node;
   }
 
-  const out = walkBlocks(blocks);
+  const out = walkArray(blocks);
   return { blocks: out, changed };
+}
+
+async function resolveNotionTargetTeamId(
+  ctx: { prisma: any; userId: string },
+  requestedTeamId?: string | null,
+): Promise<string> {
+  let targetTeamId = requestedTeamId ?? null;
+  if (!targetTeamId) {
+    const me = await ctx.prisma.user.findUnique({
+      where: { id: ctx.userId },
+      select: { personalTeamId: true },
+    });
+    targetTeamId = me?.personalTeamId ?? null;
+  }
+
+  if (!targetTeamId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "No personal teamspace — please re-sign-in to provision one before importing.",
+    });
+  }
+
+  const membership = await ctx.prisma.teamMember.findUnique({
+    where: {
+      userId_teamId: { userId: ctx.userId, teamId: targetTeamId },
+    },
+    select: { teamId: true },
+  });
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You are not a member of the destination teamspace",
+    });
+  }
+
+  return targetTeamId;
 }
 
 function slugify(name: string): string {
@@ -112,7 +184,7 @@ function slugify(name: string): string {
 async function generateUniqueSlug(
   prisma: any,
   base: string,
-  model: "team" | "project"
+  model: "team" | "project",
 ): Promise<string> {
   let slug = slugify(base);
   let suffix = 1;
@@ -153,7 +225,10 @@ const githubRouter = createTRPCRouter({
     });
 
     const importedMap = new Map(
-      importedOrgIds.map((t: any) => [t.githubOrgId, { id: t.id, name: t.name }])
+      importedOrgIds.map((t: any) => [
+        t.githubOrgId,
+        { id: t.id, name: t.name },
+      ]),
     );
 
     const personalTeam = await ctx.prisma.team.findUnique({
@@ -183,11 +258,23 @@ const githubRouter = createTRPCRouter({
   }),
 
   previewImport: protectedProcedure
-    .input(z.object({ orgLogin: z.string(), isPersonal: z.boolean().default(false) }))
+    .input(
+      z.object({
+        orgLogin: z.string(),
+        isPersonal: z.boolean().default(false),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const octokit = await createGitHubClient(ctx.userId);
 
-      let orgDetails: { id: number; login: string; name: string; description: string | null; avatarUrl: string; publicRepos: number };
+      let orgDetails: {
+        id: number;
+        login: string;
+        name: string;
+        description: string | null;
+        avatarUrl: string;
+        publicRepos: number;
+      };
       let repos: Awaited<ReturnType<typeof listOrgRepos>>;
       let members: Awaited<ReturnType<typeof listOrgMembers>>;
 
@@ -230,7 +317,7 @@ const githubRouter = createTRPCRouter({
         select: { githubRepoId: true },
       });
       const importedRepoIds = new Set(
-        existingProjects.map((p: any) => p.githubRepoId)
+        existingProjects.map((p: any) => p.githubRepoId),
       );
 
       // Check which members match existing users
@@ -261,12 +348,12 @@ const githubRouter = createTRPCRouter({
       const userByGhId = new Map(
         existingUsers
           .filter((u: any) => u.githubUserId)
-          .map((u: any) => [u.githubUserId, u])
+          .map((u: any) => [u.githubUserId, u]),
       );
       const userByLogin = new Map(
         existingUsers
           .filter((u: any) => u.githubLogin)
-          .map((u: any) => [u.githubLogin, u])
+          .map((u: any) => [u.githubLogin, u]),
       );
 
       const annotatedMembers = members.map((m) => {
@@ -334,7 +421,7 @@ const githubRouter = createTRPCRouter({
         const slug = await generateUniqueSlug(
           ctx.prisma,
           input.orgLogin,
-          "team"
+          "team",
         );
         team = await ctx.prisma.team.upsert({
           where: { githubOrgId: orgId },
@@ -373,7 +460,7 @@ const githubRouter = createTRPCRouter({
           const slug = await generateUniqueSlug(
             ctx.prisma,
             input.orgLogin,
-            "team"
+            "team",
           );
           team = await ctx.prisma.team.create({
             data: {
@@ -407,7 +494,7 @@ const githubRouter = createTRPCRouter({
           ? await listUserRepos(octokit)
           : await listOrgRepos(octokit, input.orgLogin);
         const selectedRepos = allRepos.filter((r) =>
-          input.selectedRepoIds.includes(r.id)
+          input.selectedRepoIds.includes(r.id),
         );
 
         // Batch-check which repos are already imported (single query)
@@ -429,7 +516,7 @@ const githubRouter = createTRPCRouter({
           const projectSlug = await generateUniqueSlug(
             ctx.prisma,
             repo.name,
-            "project"
+            "project",
           );
           await ctx.prisma.project.create({
             data: {
@@ -449,14 +536,15 @@ const githubRouter = createTRPCRouter({
 
       // 3b. Auto-register webhooks on imported repos (parallelized)
       const webhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
-      const appUrl = process.env.AUTH_URL || process.env.NEXT_PUBLIC_OMNITOOL_WEB_URL;
+      const appUrl =
+        process.env.AUTH_URL || process.env.NEXT_PUBLIC_OMNITOOL_WEB_URL;
       if (webhookSecret && appUrl && input.selectedRepoIds.length > 0) {
         const webhookUrl = `${appUrl}/api/webhooks/github`;
         const allReposForHooks = input.isPersonal
           ? await listUserRepos(octokit)
           : await listOrgRepos(octokit, input.orgLogin);
         const selectedForHooks = allReposForHooks.filter((r) =>
-          input.selectedRepoIds.includes(r.id)
+          input.selectedRepoIds.includes(r.id),
         );
 
         // Register webhooks in parallel (GitHub API calls are independent)
@@ -470,7 +558,7 @@ const githubRouter = createTRPCRouter({
                   owner,
                   repoName,
                   webhookUrl,
-                  webhookSecret
+                  webhookSecret,
                 );
               }
             } catch (err: any) {
@@ -478,7 +566,7 @@ const githubRouter = createTRPCRouter({
               if (err.status !== 422) {
                 console.error(
                   `[GitHub Import] Failed to register webhook for ${repo.fullName}:`,
-                  err.message
+                  err.message,
                 );
               }
             }
@@ -518,11 +606,15 @@ const githubRouter = createTRPCRouter({
           },
           select: { userId: true },
         });
-        const alreadyMembers = new Set(existingMemberships.map((m) => m.userId));
+        const alreadyMembers = new Set(
+          existingMemberships.map((m) => m.userId),
+        );
 
         for (const member of orgMembers) {
           let user =
-            userByGithubId.get(member.id) ?? userByLogin.get(member.login) ?? null;
+            userByGithubId.get(member.id) ??
+            userByLogin.get(member.login) ??
+            null;
 
           if (!user) {
             // Create placeholder user
@@ -617,7 +709,14 @@ const githubRouter = createTRPCRouter({
 const notionRouter = createTRPCRouter({
   // List pages available for import
   listPages: protectedProcedure
-    .input(z.object({ cursor: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          cursor: z.string().optional(),
+          teamId: z.string().cuid().optional(),
+        })
+        .optional(),
+    )
     .query(async ({ ctx, input }) => {
       const account = await ctx.prisma.connectedAccount.findUnique({
         where: { userId_provider: { userId: ctx.userId, provider: "NOTION" } },
@@ -629,12 +728,20 @@ const notionRouter = createTRPCRouter({
         });
       }
 
+      const targetTeamId = await resolveNotionTargetTeamId(
+        ctx,
+        input?.teamId ?? null,
+      );
       const client = await createNotionClient(ctx.userId);
       const result = await listNotionPages(client, input?.cursor ?? undefined);
 
-      // Check which pages are already imported
+      // Check which pages are already imported in this destination teamspace.
       const existingNotes = await ctx.prisma.note.findMany({
-        where: { notionPageId: { in: result.pages.map((p) => p.id) } },
+        where: {
+          teamId: targetTeamId,
+          deletedAt: null,
+          notionPageId: { in: result.pages.map((p) => p.id) },
+        },
         select: { notionPageId: true },
       });
       const importedIds = new Set(existingNotes.map((n) => n.notionPageId));
@@ -651,7 +758,12 @@ const notionRouter = createTRPCRouter({
 
   // Search pages by query
   searchPages: protectedProcedure
-    .input(z.object({ query: z.string().min(1) }))
+    .input(
+      z.object({
+        query: z.string().min(1),
+        teamId: z.string().cuid().optional(),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const account = await ctx.prisma.connectedAccount.findUnique({
         where: { userId_provider: { userId: ctx.userId, provider: "NOTION" } },
@@ -663,6 +775,10 @@ const notionRouter = createTRPCRouter({
         });
       }
 
+      const targetTeamId = await resolveNotionTargetTeamId(
+        ctx,
+        input.teamId ?? null,
+      );
       const client = await createNotionClient(ctx.userId);
       const results = await searchNotionPages(client, input.query);
 
@@ -670,7 +786,7 @@ const notionRouter = createTRPCRouter({
         let title = "Untitled";
         if (page.properties) {
           const titleProp = Object.values(page.properties).find(
-            (p: any) => p.type === "title"
+            (p: any) => p.type === "title",
           ) as any;
           if (titleProp?.title?.[0]?.plain_text) {
             title = titleProp.title.map((t: any) => t.plain_text).join("");
@@ -686,12 +802,18 @@ const notionRouter = createTRPCRouter({
         };
       });
 
-      // Check which already imported
+      // Check which pages are already imported in this destination teamspace.
       const existingNotes = await ctx.prisma.note.findMany({
-        where: { notionPageId: { in: pages.map((p: any) => p.id) } },
+        where: {
+          teamId: targetTeamId,
+          deletedAt: null,
+          notionPageId: { in: pages.map((p: any) => p.id) },
+        },
         select: { notionPageId: true },
       });
-      const importedIds = new Set(existingNotes.map((n: any) => n.notionPageId));
+      const importedIds = new Set(
+        existingNotes.map((n: any) => n.notionPageId),
+      );
 
       return {
         pages: pages.map((p: any) => ({
@@ -708,36 +830,13 @@ const notionRouter = createTRPCRouter({
       const client = await createNotionClient(ctx.userId);
       let imported = 0;
       let skipped = 0;
+      let failed = 0;
+      const errors: Array<{ pageId: string; message: string }> = [];
 
-      // Resolve target teamspace. If not specified, default to the caller's
-      // PERSONAL teamspace (provisioned by `auth()`). Validate membership.
-      let targetTeamId = input.teamId ?? null;
-      if (!targetTeamId) {
-        const me = await ctx.prisma.user.findUnique({
-          where: { id: ctx.userId },
-          select: { personalTeamId: true },
-        });
-        targetTeamId = me?.personalTeamId ?? null;
-      }
-      if (!targetTeamId) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            "No personal teamspace — please re-sign-in to provision one before importing.",
-        });
-      }
-      const membership = await ctx.prisma.teamMember.findUnique({
-        where: {
-          userId_teamId: { userId: ctx.userId, teamId: targetTeamId },
-        },
-        select: { teamId: true },
-      });
-      if (!membership) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "You are not a member of the destination teamspace",
-        });
-      }
+      const targetTeamId = await resolveNotionTargetTeamId(
+        ctx,
+        input.teamId ?? null,
+      );
 
       // Optional parent note must live inside the destination teamspace.
       let rootParentId: string | null = input.parentId ?? null;
@@ -770,7 +869,11 @@ const notionRouter = createTRPCRouter({
       // We look across the destination teamspace so a teammate's imports are
       // also reused as link targets.
       const existingAll = await ctx.prisma.note.findMany({
-        where: { teamId: targetTeamId, notionPageId: { not: null } },
+        where: {
+          teamId: targetTeamId,
+          deletedAt: null,
+          notionPageId: { not: null },
+        },
         select: { id: true, notionPageId: true },
       });
       for (const e of existingAll) {
@@ -790,7 +893,11 @@ const notionRouter = createTRPCRouter({
       for (const pageId of input.selectedPageIds) {
         try {
           const existing = await ctx.prisma.note.findFirst({
-            where: { notionPageId: pageId, teamId: targetTeamId },
+            where: {
+              notionPageId: pageId,
+              teamId: targetTeamId,
+              deletedAt: null,
+            },
             select: { id: true },
           });
           if (existing) {
@@ -816,10 +923,11 @@ const notionRouter = createTRPCRouter({
           try {
             blocknoteBlocks = await markdownToNoteBlocks(markdown);
           } catch (err) {
-            console.error(
-              "[notion.importPages] markdownToNoteBlocks failed",
-              { pageId, mdLen: markdown.length, err },
-            );
+            console.error("[notion.importPages] markdownToNoteBlocks failed", {
+              pageId,
+              mdLen: markdown.length,
+              err,
+            });
             throw err;
           }
 
@@ -854,7 +962,12 @@ const notionRouter = createTRPCRouter({
             message: err instanceof Error ? err.message : String(err),
             stack: err instanceof Error ? err.stack : undefined,
           });
-          throw err;
+          failed++;
+          errors.push({
+            pageId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          continue;
         }
       }
 
@@ -905,7 +1018,7 @@ const notionRouter = createTRPCRouter({
         }
       }
 
-      return { imported, skipped };
+      return { imported, skipped, failed, errors };
     }),
 
   /**

@@ -7,7 +7,7 @@ import { makeEditNoteSectionTool } from "./notes/edit-note-section";
 import { makeRemoveBlocksTool } from "./notes/remove-blocks";
 import { fetchWebPage } from "./notes/fetch-web-page";
 import { searchWeb } from "./notes/search-web";
-import { searchNotes } from "./search-notes";
+import { makeSearchNotesTool } from "./search-notes";
 
 export function createNotesChatTools(context: {
   userId: string;
@@ -17,7 +17,7 @@ export function createNotesChatTools(context: {
     // Note reading & browsing
     readNote: makeReadNoteTool(context.userId),
     listNotes: makeListNotesTool(context.userId),
-    searchNotes,
+    searchNotes: makeSearchNotesTool(context.userId),
 
     // Note creation & editing
     createNote: makeCreateNoteTool(context.userId),

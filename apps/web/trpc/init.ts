@@ -114,6 +114,30 @@ export const noteMutationProcedure = noteProcedure.use(
   },
 );
 
+/**
+ * Asserts the user is a member of `teamId`. Throws FORBIDDEN otherwise.
+ * Use inside protected procedures that operate on team-scoped resources
+ * accessed by id (workflow/task/issue/project). Resolve the resource's
+ * `teamId` first, then call this helper.
+ */
+export async function assertTeamMembership(
+  prismaClient: typeof prisma,
+  userId: string,
+  teamId: string,
+): Promise<{ role: string }> {
+  const membership = await prismaClient.teamMember.findUnique({
+    where: { userId_teamId: { userId, teamId } },
+    select: { role: true },
+  });
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Not a member of this team",
+    });
+  }
+  return membership;
+}
+
 export const teamProtectedProcedure = protectedProcedure.use(
   async ({ ctx, next }) => {
     let teamId = ctx.activeTeamId;

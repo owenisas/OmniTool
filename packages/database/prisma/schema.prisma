@@ -12,29 +12,33 @@ generator client {
 // ─── USERS & AUTH ───────────────────────────────────────────
 
 model User {
-  id              String   @id @default(cuid())
-  supabaseAuthId  String?  @unique
-  email           String   @unique
-  name            String
-  passwordHash    String?  // deprecated — kept for migration, Supabase Auth handles passwords
-  avatarUrl       String?
-  role            String   @default("MEMBER")
-  githubUserId    Int?     @unique
-  githubLogin     String?  @unique
+  id             String   @id @default(cuid())
+  supabaseAuthId String?  @unique
+  email          String   @unique
+  name           String
+  passwordHash   String? // deprecated — kept for migration, Supabase Auth handles passwords
+  avatarUrl      String?
+  role           String   @default("MEMBER")
+  githubUserId   Int?     @unique
+  githubLogin    String?  @unique
+  /// Slack user id (e.g. `U01ABC...`) — set when the user links their Slack
+  /// identity to OmniTool so inbound `app_mention` events can resolve to a
+  /// concrete OmniTool user.
+  slackUserId    String?  @unique
   /// Back-pointer to this user's auto-created PERSONAL teamspace. Set by the
   /// JIT user-sync path in `auth()`. Nullable during the migration window.
-  personalTeamId  String?  @unique
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  personalTeamId String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   emailVerified DateTime?
 
   teamMembers          TeamMember[]
-  personalTeam         Team?             @relation("PersonalTeam", fields: [personalTeamId], references: [id])
-  assignedTasks        Task[]            @relation("TaskAssignee")
-  createdTasks         Task[]            @relation("TaskCreator")
-  assignedIssues       Issue[]           @relation("IssueAssignee")
-  reportedIssues       Issue[]           @relation("IssueReporter")
+  personalTeam         Team?                 @relation("PersonalTeam", fields: [personalTeamId], references: [id])
+  assignedTasks        Task[]                @relation("TaskAssignee")
+  createdTasks         Task[]                @relation("TaskCreator")
+  assignedIssues       Issue[]               @relation("IssueAssignee")
+  reportedIssues       Issue[]               @relation("IssueReporter")
   notes                Note[]
   noteVersions         NoteVersion[]
   timeEntries          TimeEntry[]
@@ -43,13 +47,15 @@ model User {
   connectedAccounts    ConnectedAccount[]
   githubImports        GitHubImportLog[]
   dailyCodingSummaries DailyCodingSummary[]
-  invitationsSent      TeamInvitation[]  @relation("InvitationsSent")
+  invitationsSent      TeamInvitation[]      @relation("InvitationsSent")
+  slackInstalls        SlackTeamInstall[]
+  personalAccessTokens PersonalAccessToken[]
   notePreference       UserNotePreference?
   newsDigests          NewsDigest[]
   agentHandoffs        AgentHandoff[]
-  mentionsReceived     NoteMention[]      @relation("MentionedUser")
-  mentionsSent         NoteMention[]      @relation("MentionAuthor")
-  noteComments         NoteComment[]      @relation("NoteCommentAuthor")
+  mentionsReceived     NoteMention[]         @relation("MentionedUser")
+  mentionsSent         NoteMention[]         @relation("MentionAuthor")
+  noteComments         NoteComment[]         @relation("NoteCommentAuthor")
   noteCommentReads     NoteCommentRead[]
 
   @@map("users")
@@ -74,6 +80,10 @@ model Team {
   githubOrgId      Int?      @unique
   githubOrgLogin   String?   @unique
   githubImportedAt DateTime?
+  /// "full" (default) emits issue/note details inline in Slack replies;
+  /// "task-link-only" replies with just a deep link to the OmniTool record.
+  /// Mirrors the Codex enterprise least-noise toggle (research §12.2).
+  slackReplyMode   String    @default("full")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -82,6 +92,7 @@ model Team {
   dailyCodingSummaries DailyCodingSummary[]
   invitations          TeamInvitation[]
   notes                Note[]
+  slackInstalls        SlackTeamInstall[]
   personalForUser      User?                @relation("PersonalTeam")
 
   @@index([kind])
@@ -137,14 +148,14 @@ model Project {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  team              Team                @relation(fields: [teamId], references: [id])
-  tasks             Task[]
-  issues            Issue[]
-  metrics           PerformanceMetric[]
-  linkedNote        Note?
+  team               Team                @relation(fields: [teamId], references: [id])
+  tasks              Task[]
+  issues             Issue[]
+  metrics            PerformanceMetric[]
+  linkedNote         Note?
   githubPullRequests GitHubPullRequest[]
-  githubCommits     GitHubCommit[]
-  agentHandoffs     AgentHandoff[]
+  githubCommits      GitHubCommit[]
+  agentHandoffs      AgentHandoff[]
 
   @@map("projects")
 }
@@ -205,10 +216,10 @@ model Issue {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assignee User?    @relation("IssueAssignee", fields: [assigneeId], references: [id])
-  reporter User     @relation("IssueReporter", fields: [reporterId], references: [id])
-  labels   Label[]  @relation("IssueLabels")
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee User?     @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  reporter User      @relation("IssueReporter", fields: [reporterId], references: [id])
+  labels   Label[]   @relation("IssueLabels")
   comments Comment[]
 
   @@index([projectId])
@@ -235,7 +246,7 @@ model Note {
   parentId        String?
   position        Int       @default(0)
   isPinned        Boolean   @default(false)
-  notionPageId    String?   @unique
+  notionPageId    String?
   notionUrl       String?
   linkedProjectId String?   @unique
   isAutoCreated   Boolean   @default(false)
@@ -266,6 +277,7 @@ model Note {
   @@index([teamId])
   @@index([authorId])
   @@index([notionPageId])
+  @@index([teamId, notionPageId])
   @@index([linkedProjectId])
   @@index([authorId, deletedAt])
   @@map("notes")
@@ -295,13 +307,13 @@ model NoteLink {
 // ─── NOTE MENTIONS (real @-person notifications) ────────────
 
 model NoteMention {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   noteId          String
   /// BlockNote block id where the @-chip was inserted, for jump-to.
   blockId         String?
   mentionedUserId String
   createdById     String
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
   /// Set when the mentioned user opens / dismisses this mention.
   readAt          DateTime?
 
@@ -352,8 +364,8 @@ model NoteVersion {
   id           String   @id @default(cuid())
   noteId       String
   editorUserId String
-  source       String   // "user-save" | "ai-edit" | "manual" | "restore"
-  aiTool       String?  // e.g. "appendToNote", "editSection" when source = "ai-edit"
+  source       String // "user-save" | "ai-edit" | "manual" | "restore"
+  aiTool       String? // e.g. "appendToNote", "editSection" when source = "ai-edit"
   title        String
   blocks       Json
   contentText  String   @default("")
@@ -532,16 +544,16 @@ model DailyCodingSummary {
   id             String   @id @default(cuid())
   userId         String
   teamId         String?
-  date           String   // "YYYY-MM-DD" in user's local timezone
-  timezone       String   // IANA timezone name
+  date           String // "YYYY-MM-DD" in user's local timezone
+  timezone       String // IANA timezone name
   sessionCount   Int
   totalMessages  Int
-  sources        String   // JSON array of source labels
+  sources        String // JSON array of source labels
   title          String
   overview       String   @db.Text
-  keyTopics      String   // JSON array
-  actionItems    String   // JSON array
-  risks          String   // JSON array
+  keyTopics      String // JSON array
+  actionItems    String // JSON array
+  risks          String // JSON array
   perSessionMeta String?  @db.Text // JSON [{id, source, title, messageCount, project}]
   modelUsed      String?
   createdAt      DateTime @default(now())
@@ -559,12 +571,12 @@ model DailyCodingSummary {
 
 model ActivityEvent {
   id          String   @id @default(cuid())
-  type        String   // e.g. "task.created", "issue.closed", "note.updated", "github.pr.merged"
+  type        String // e.g. "task.created", "issue.closed", "note.updated", "github.pr.merged"
   actorId     String?
   actorType   String   @default("user") // "user" | "system" | "integration"
   teamId      String?
   projectId   String?
-  subjectType String   // "task" | "issue" | "note" | "pr" | "commit" | "handoff"
+  subjectType String // "task" | "issue" | "note" | "pr" | "commit" | "handoff"
   subjectId   String
   payload     Json     @default("{}")
   createdAt   DateTime @default(now())
@@ -578,11 +590,11 @@ model ActivityEvent {
 
 model EntityLink {
   id         String   @id @default(cuid())
-  sourceType String   // "task" | "issue" | "note" | "github_pr" | "github_issue" | "handoff"
+  sourceType String // "task" | "issue" | "note" | "github_pr" | "github_issue" | "handoff"
   sourceId   String
   targetType String
   targetId   String
-  linkType   String   // "references" | "implements" | "caused_by" | "blocks"
+  linkType   String // "references" | "implements" | "caused_by" | "blocks"
   metadata   Json?
   createdBy  String?
   createdAt  DateTime @default(now())
@@ -602,7 +614,7 @@ model GitHubPullRequest {
   githubRepoFullName String
   number             Int
   title              String
-  state              String    // "open" | "closed" | "merged"
+  state              String // "open" | "closed" | "merged"
   authorGithubLogin  String?
   authorUserId       String?
   headBranch         String
@@ -644,9 +656,9 @@ model GitHubCommit {
 model NewsDigest {
   id        String    @id @default(cuid())
   userId    String
-  date      String    // "YYYY-MM-DD"
-  topics    Json      // extracted topics used for search
-  articles  Json      // [{title, url, snippet, topic, summary}]
+  date      String // "YYYY-MM-DD"
+  topics    Json // extracted topics used for search
+  articles  Json // [{title, url, snippet, topic, summary}]
   synthesis String    @db.Text
   readAt    DateTime?
   createdAt DateTime  @default(now())
@@ -665,18 +677,18 @@ model AgentHandoff {
   projectId       String
   title           String
   description     String    @db.Text
-  contextPayload  Json      // assembled from tasks, issues, notes, repo context
-  agentProvider   String    // "codex" | "claude-code"
+  contextPayload  Json // assembled from tasks, issues, notes, repo context
+  agentProvider   String // "codex" | "claude-code"
   agentConfig     Json?
   status          String    @default("DRAFT") // DRAFT | SUBMITTED | IN_PROGRESS | AWAITING_REVIEW | APPROVED | REJECTED
   submittedAt     DateTime?
   externalRunId   String?
   externalUrl     String?
   resultSummary   String?   @db.Text
-  resultArtifacts Json?     // [{type: "patch"|"pr_url"|"file", content, path}]
+  resultArtifacts Json? // [{type: "patch"|"pr_url"|"file", content, path}]
   completedAt     DateTime?
   reviewedBy      String?
-  reviewStatus    String?   // "approved" | "rejected"
+  reviewStatus    String? // "approved" | "rejected"
   reviewNotes     String?
   reviewedAt      DateTime?
   createdAt       DateTime  @default(now())
@@ -735,7 +747,7 @@ model NoteTemplate {
 model NoteDatabase {
   id        String   @id @default(cuid())
   noteId    String   @unique
-  schema    Json     // PropertyDefinition[]
+  schema    Json // PropertyDefinition[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -750,7 +762,7 @@ model NoteDatabaseRow {
   id         String   @id @default(cuid())
   databaseId String
   noteId     String   @unique
-  properties Json     // {[propertyId]: value}
+  properties Json // {[propertyId]: value}
   position   Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -766,8 +778,8 @@ model NoteDatabaseView {
   id         String   @id @default(cuid())
   databaseId String
   name       String
-  type       String   // "table" | "board" | "calendar" | "gallery"
-  config     Json     // {filters, sorts, groupBy, hiddenProperties, propertyWidths, ...}
+  type       String // "table" | "board" | "calendar" | "gallery"
+  config     Json // {filters, sorts, groupBy, hiddenProperties, propertyWidths, ...}
   position   Int      @default(0)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -783,7 +795,7 @@ model NoteDatabaseView {
 model NoteShare {
   id         String    @id @default(cuid())
   noteId     String
-  targetType String    // "user" | "team" | "link" | "public"
+  targetType String // "user" | "team" | "link" | "public"
   targetId   String?
   token      String?   @unique
   role       String    @default("viewer") // "viewer" | "commenter" | "editor"
@@ -836,17 +848,17 @@ model Workflow {
 }
 
 model WorkflowTrigger {
-  id          String   @id @default(cuid())
-  workflowId  String   @unique
-  kind        String   // "event" | "schedule" | "manual" | "webhook"
-  eventTypes  String?  // JSON array of ActivityEventType values
+  id          String    @id @default(cuid())
+  workflowId  String    @unique
+  kind        String // "event" | "schedule" | "manual" | "webhook"
+  eventTypes  String? // JSON array of ActivityEventType values
   eventFilter Json?
   cronExpr    String?
   timezone    String?
-  webhookSlug String?  @unique
+  webhookSlug String?   @unique
   lastFiredAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
 
@@ -857,7 +869,7 @@ model WorkflowStep {
   id         String   @id @default(cuid())
   workflowId String
   position   Int
-  kind       String   // "agent" | "action" | "condition" | "approval" | "delay" | "parallel"
+  kind       String // "agent" | "action" | "condition" | "approval" | "delay" | "parallel"
   config     Json
   label      String?
   createdAt  DateTime @default(now())
@@ -871,16 +883,16 @@ model WorkflowStep {
 }
 
 model WorkflowRun {
-  id          String    @id @default(cuid())
-  workflowId  String
-  status      String    @default("pending") // "pending"|"running"|"completed"|"failed"|"waiting_approval"|"cancelled"
-  triggerData Json?
-  currentStep Int       @default(0)
-  stepResults Json      @default("{}")
-  context     Json      @default("{}")
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
-  error       String?
+  id           String    @id @default(cuid())
+  workflowId   String
+  status       String    @default("pending") // "pending"|"running"|"completed"|"failed"|"waiting_approval"|"cancelled"
+  triggerData  Json?
+  currentStep  Int       @default(0)
+  stepResults  Json      @default("{}")
+  context      Json      @default("{}")
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  error        String?
   approvalData Json?
 
   workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
@@ -897,11 +909,67 @@ model SlackNotificationConfig {
   teamId      String
   channelId   String
   channelName String
-  eventTypes  String   // JSON array of ActivityEventType values
+  eventTypes  String // JSON array of ActivityEventType values
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@unique([teamId, channelId])
   @@map("slack_notification_configs")
+}
+
+// ─── SLACK WORKSPACE INSTALL ────────────────────────────────
+
+/**
+ * Per-Slack-workspace install record. Captures the bot token + identifying
+ * metadata when an OmniTool user installs the Slack app in a workspace via
+ * the OAuth callback. Enables inbound `app_mention` dispatch by mapping
+ * `payload.team_id` → workspace install → bot token.
+ */
+model SlackTeamInstall {
+  id                String   @id @default(cuid())
+  teamId            String   @unique // Slack workspace ID (T...)
+  teamName          String
+  botUserId         String
+  encryptedBotToken String
+  installerUserId   String
+  /// Optional OmniTool team association — set when the install should be
+  /// scoped to a specific OmniTool teamspace.
+  workspaceId       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  installer User  @relation(fields: [installerUserId], references: [id], onDelete: Cascade)
+  workspace Team? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([installerUserId])
+  @@index([workspaceId])
+  @@map("slack_team_installs")
+}
+
+// ─── PERSONAL ACCESS TOKENS (MCP / API) ─────────────────────
+
+/**
+ * Long-lived bearer tokens used by external coding agents (Cursor, Claude
+ * Code, Codex) to authenticate with OmniTool's MCP server. Tokens are
+ * generated as random hex, shown to the user once on creation, and stored
+ * only as a SHA-256 hash. Revocation is soft (revokedAt) so audit history
+ * is preserved.
+ */
+model PersonalAccessToken {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  hashedToken String    @unique
+  /// JSON array of scope strings (currently informational; tools are gated
+  /// by the user identity that owns the token).
+  scopes      String    @default("[]")
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("personal_access_tokens")
 }

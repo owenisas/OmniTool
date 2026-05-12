@@ -4,13 +4,13 @@ import { chatAgentConfig } from "@omnitool/ai/agents";
 import { chatSystemPrompt } from "@omnitool/ai/prompts";
 import { createChatTools } from "@omnitool/ai";
 import { prisma } from "@omnitool/database";
-import { streamText } from "ai";
+import { generateText, stepCountIs } from "ai";
 import { apiLimiter } from "@/lib/rate-limit";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-type StreamTextModel = Parameters<typeof streamText>[0]["model"];
+type GenerateTextModel = Parameters<typeof generateText>[0]["model"];
 
 type IncomingMessage = {
   role?: string;
@@ -115,54 +115,47 @@ export async function POST(req: Request) {
 
     const tools = createChatTools({ userId: session.user.id });
 
-    // Stream the response — client receives chunks immediately instead of
-    // waiting 5-15s for the full generation to complete.
-    const result = streamText({
-      model: resolved.model as StreamTextModel,
+    const result = await generateText({
+      model: resolved.model as GenerateTextModel,
       system: chatSystemPrompt,
       messages,
       tools,
-      maxSteps: chatAgentConfig.maxSteps,
+      stopWhen: stepCountIs(chatAgentConfig.maxSteps),
       temperature: 0.2,
-      onFinish: async ({ text, toolCalls, toolResults, usage }) => {
-        const content =
-          text?.trim() ||
-          "I ran the requested tools but did not produce a text reply. Ask again with more detail.";
+    });
 
-        // Save assistant response
-        const toolCallsJson =
-          toolCalls && toolCalls.length > 0
-            ? JSON.stringify(toolCalls)
-            : null;
-        const toolResultsJson =
-          toolResults && toolResults.length > 0
-            ? JSON.stringify(toolResults)
-            : null;
+    const content =
+      result.text?.trim() ||
+      "I ran the requested tools but did not produce a text reply. Ask again with more detail.";
 
-        await prisma.aIMessage.create({
-          data: {
-            conversationId: conversationId!,
-            role: "assistant",
-            content,
-            toolCalls: toolCallsJson,
-            toolResults: toolResultsJson,
-            tokenCount: usage?.totalTokens ?? null,
-          },
-        });
-
-        // Touch conversation updatedAt
-        await prisma.aIConversation.update({
-          where: { id: conversationId! },
-          data: { updatedAt: new Date() },
-        });
+    await prisma.aIMessage.create({
+      data: {
+        conversationId: conversationId!,
+        role: "assistant",
+        content,
+        toolCalls: result.toolCalls.length
+          ? JSON.stringify(result.toolCalls)
+          : null,
+        toolResults: result.toolResults.length
+          ? JSON.stringify(result.toolResults)
+          : null,
+        tokenCount: result.totalUsage.totalTokens ?? null,
       },
     });
 
-    return result.toDataStreamResponse({
+    await prisma.aIConversation.update({
+      where: { id: conversationId! },
+      data: { updatedAt: new Date() },
+    });
+
+    return NextResponse.json(
+      { content },
+      {
       headers: {
         "X-Conversation-Id": conversationId,
       },
-    });
+      },
+    );
   } catch (error) {
     console.error("[api/ai/chat]", error);
     const message =

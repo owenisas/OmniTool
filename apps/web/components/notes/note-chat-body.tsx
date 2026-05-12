@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useRef, type MutableRefObject } from "react";
-import { useChat } from "ai/react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MutableRefObject,
+} from "react";
 import { Button } from "@omnitool/ui/components/button";
 import { Input } from "@omnitool/ui/components/input";
 import { Bot, Send, Sparkles, Trash2, X } from "lucide-react";
-import { ChatMessage } from "./chat-message";
+import { ChatMessage, type NoteChatMessage } from "./chat-message";
 import { useNoteEditor } from "./note-editor-context";
 
 interface NoteChatBodyProps {
@@ -17,14 +22,6 @@ interface NoteChatBodyProps {
   trailingHeader?: React.ReactNode;
 }
 
-const MUTATING_TOOLS = [
-  "appendToNote",
-  "editNoteSection",
-  "removeBlocks",
-  "createNote",
-  "organizeNote",
-];
-
 export function NoteChatBody({
   noteId,
   onClose,
@@ -34,27 +31,10 @@ export function NoteChatBody({
   const { refreshNote } = useNoteEditor();
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  const {
-    messages,
-    input,
-    handleInputChange,
-    handleSubmit,
-    isLoading,
-    setMessages,
-    setInput,
-    error,
-    reload,
-  } = useChat({
-    api: "/api/ai/notes-chat",
-    body: { noteId },
-    onToolCall: ({ toolCall }) => {
-      if (MUTATING_TOOLS.includes(toolCall.toolName)) {
-        // Small delay so DB write completes before refetch
-        setTimeout(() => refreshNote(), 500);
-      }
-    },
-  });
+  const [messages, setMessages] = useState<NoteChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -80,6 +60,95 @@ export function NoteChatBody({
     "Add a summary section at the top",
     "Research and add more details about this topic",
   ];
+
+  async function sendMessage(content: string) {
+    const trimmed = content.trim();
+    if (!trimmed || isLoading) return;
+
+    const userMessage: NoteChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: trimmed,
+    };
+    const assistantMessage: NoteChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+    };
+    const requestMessages = [...messages, userMessage].map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    setInput("");
+    setError(null);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch("/api/ai/notes-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: requestMessages, noteId }),
+      });
+
+      if (!response.ok || !response.body) {
+        const body = await response.json().catch(() => null);
+        throw new Error(
+          typeof body?.error === "string"
+            ? body.error
+            : `Request failed with ${response.status}`,
+        );
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantText = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        assistantText += decoder.decode(value, { stream: true });
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessage.id
+              ? { ...message, content: assistantText }
+              : message,
+          ),
+        );
+      }
+
+      if (!assistantText.trim()) {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessage.id
+              ? {
+                  ...message,
+                  content:
+                    "I executed the requested tools. Ask if you need more details.",
+                }
+              : message,
+          ),
+        );
+      }
+
+      setTimeout(() => refreshNote(), 500);
+    } catch (err) {
+      const nextError =
+        err instanceof Error ? err : new Error("Failed to send message");
+      setError(nextError);
+      setMessages((prev) =>
+        prev.filter((message) => message.id !== assistantMessage.id),
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void sendMessage(input);
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -163,9 +232,9 @@ export function NoteChatBody({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => reload()}
+              onClick={() => setError(null)}
             >
-              Retry
+              Dismiss
             </Button>
           </div>
         )}
@@ -184,7 +253,7 @@ export function NoteChatBody({
           <Input
             ref={inputRef}
             value={input}
-            onChange={handleInputChange}
+            onChange={(event) => setInput(event.target.value)}
             placeholder="Ask AI to help with this note..."
             className="flex-1 text-sm"
             disabled={isLoading}

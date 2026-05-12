@@ -59,13 +59,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run database migrations (production only)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: pnpm db:generate && pnpm db:deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-
+      # Order intentionally: build → migrate → deploy.
+      # Building first means a broken commit fails the pipeline before any
+      # schema changes are applied. Migrations are still additive/forward-only,
+      # so old code remains compatible if the deploy step fails after migrate.
       - name: Pull Vercel Environment Information
         run: vercel pull --yes --environment=${{ github.event_name == 'push' && 'production' || 'preview' }} --token=${{ secrets.VERCEL_TOKEN }}
         env:
@@ -77,6 +74,13 @@ jobs:
         env:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+      - name: Run database migrations (production only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: pnpm db:generate && pnpm db:deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
 
       - name: Deploy to Vercel (Production)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

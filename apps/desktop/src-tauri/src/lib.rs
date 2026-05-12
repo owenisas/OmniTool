@@ -1,3 +1,4 @@
+use std::net::TcpListener;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -166,8 +167,82 @@ fn find_server_js(server_dir: &std::path::Path) -> Result<std::path::PathBuf, St
     ))
 }
 
+/// Best-effort: if `port` is already in use, find the listening process and
+/// kill it. Tauri does NOT terminate sidecars on ungraceful exit (SIGKILL,
+/// crash), so a stale `next-server` from a previous run can remain bound to
+/// 19283 — the new webview then connects to the OLD sidecar and serves
+/// stale code despite a fresh build/install.
+///
+/// Tradeoff: if a non-OmniTool process happens to listen on 19283 we kill
+/// it. The port is hardcoded for OmniTool's use, so collision with any
+/// other service is unexpected and considered a misconfiguration.
+fn reclaim_port_if_stuck(port: u16) {
+    // Probe: try binding briefly. Bind succeeds = port is free → return.
+    if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+        return;
+    }
+    eprintln!(
+        "[omnitool] Port {port} is in use — attempting to reclaim from stale sidecar"
+    );
+
+    #[cfg(unix)]
+    {
+        if let Ok(output) = Command::new("lsof")
+            .args(["-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+            .output()
+        {
+            if output.status.success() {
+                let pids: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                for pid in pids {
+                    eprintln!("[omnitool] Killing stale process pid={pid} on port {port}");
+                    let _ = Command::new("kill").args(["-9", &pid]).status();
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(output) = Command::new("cmd")
+            .args(["/C", &format!("netstat -aon | findstr :{port}")])
+            .output()
+        {
+            use std::collections::HashSet;
+            let pids: HashSet<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|l| l.contains("LISTENING"))
+                .filter_map(|l| l.split_whitespace().last().map(|s| s.to_string()))
+                .collect();
+            for pid in pids {
+                eprintln!("[omnitool] taskkilling stale pid={pid} on port {port}");
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &pid])
+                    .status();
+            }
+        }
+    }
+
+    // Settle wait so the OS releases the TIME_WAIT slot before spawn.
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Confirm the port is now free; if not, log loudly and continue —
+    // spawn will likely fail and surface a clearer error to the user.
+    if TcpListener::bind(("127.0.0.1", port)).is_err() {
+        eprintln!(
+            "[omnitool] Port {port} is STILL in use after reclaim attempt. \
+             Sidecar spawn will probably fail."
+        );
+    }
+}
+
 /// Spawn the Next.js standalone server as a child process.
 fn spawn_server(app: &tauri::App) -> Result<Child, String> {
+    reclaim_port_if_stuck(SERVER_PORT);
+
     let node_bin = resolve_node_binary(app)?;
     let server_dir = resolve_server_dir(app)?;
     let server_js = find_server_js(&server_dir)?;
@@ -194,33 +269,82 @@ fn spawn_server(app: &tauri::App) -> Result<Child, String> {
         // Prevent Next.js telemetry in desktop app
         .env("NEXT_TELEMETRY_DISABLED", "1");
 
-    // Load server.env from the resources directory (may be nested under resources/)
-    let env_file_candidates = [
-        resource_dir.join("resources/server.env"),
-        resource_dir.join("server.env"),
-    ];
+    // Load server.env. Lookup order (highest precedence first):
+    //   1. User config dir   (`~/Library/Application Support/dev.omnitool.app/server.env` on macOS,
+    //                         `~/.config/dev.omnitool.app/server.env` on Linux,
+    //                         `%APPDATA%\dev.omnitool.app\server.env` on Windows)
+    //   2. User data dir     (older Tauri layout — kept as compat for installs that
+    //                         provisioned the file via `app_data_dir`)
+    //   3. Bundled fallback  (`resources/server.env` inside the .app — dev-only;
+    //                         production builds strip this via desktop-before-build.mjs)
+    //
+    // Production secrets MUST live at (1) — provisioned per-machine by the
+    // org admin via `scripts/desktop-install-env.sh`. The bundled fallback is
+    // a developer convenience; shipping secrets in the DMG lets anyone with
+    // the .app extract `INTEGRATION_ENCRYPTION_KEY`/`AUTH_SECRET`/etc.
+    let mut env_file_candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(d) = app.path().app_config_dir() {
+        env_file_candidates.push(d.join("server.env"));
+    }
+    if let Ok(d) = app.path().app_data_dir() {
+        env_file_candidates.push(d.join("server.env"));
+    }
+    env_file_candidates.push(resource_dir.join("resources/server.env"));
+    env_file_candidates.push(resource_dir.join("server.env"));
+
     let env_file = env_file_candidates.iter().find(|p| p.exists());
-    if let Some(env_file) = env_file {
-        if let Ok(contents) = std::fs::read_to_string(&env_file) {
-            for line in contents.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                if let Some((key, value)) = line.split_once('=') {
-                    let key = key.trim();
-                    let value = value.trim();
-                    // Strip matching outer quotes only
-                    let value = if (value.starts_with('"') && value.ends_with('"'))
-                        || (value.starts_with('\'') && value.ends_with('\''))
-                    {
-                        &value[1..value.len() - 1]
-                    } else {
-                        value
-                    };
-                    cmd.env(key, value);
+    match env_file {
+        Some(env_file) => {
+            // Warn if the chosen file is the bundled one — secrets in the
+            // bundle are extractable by anyone who copies the .app.
+            let is_bundled = env_file.starts_with(&resource_dir);
+            if is_bundled {
+                eprintln!(
+                    "[omnitool] WARNING: loading bundled server.env from {}. \
+                     Production builds should provision secrets at \
+                     `app_config_dir()/server.env` instead.",
+                    env_file.display()
+                );
+            } else {
+                println!(
+                    "[omnitool] Loaded user-provisioned server.env from {}",
+                    env_file.display()
+                );
+            }
+            if let Ok(contents) = std::fs::read_to_string(env_file) {
+                for line in contents.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((key, value)) = line.split_once('=') {
+                        let key = key.trim();
+                        let value = value.trim();
+                        // Strip matching outer quotes only
+                        let value = if (value.starts_with('"') && value.ends_with('"'))
+                            || (value.starts_with('\'') && value.ends_with('\''))
+                        {
+                            &value[1..value.len() - 1]
+                        } else {
+                            value
+                        };
+                        cmd.env(key, value);
+                    }
                 }
             }
+        }
+        None => {
+            eprintln!(
+                "[omnitool] No server.env found in any of: {}",
+                env_file_candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            eprintln!(
+                "[omnitool] Run `scripts/desktop-install-env.sh` to provision per-machine secrets."
+            );
         }
     }
 

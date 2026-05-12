@@ -6,7 +6,7 @@ export function makeListNotesTool(userId: string) {
   return tool({
     description:
       "List notes. Filter by parent (for tree navigation), tag, or search term. Returns titles and snippets, not full content.",
-    parameters: z.object({
+    inputSchema: z.object({
       parentId: z
         .string()
         .nullable()
