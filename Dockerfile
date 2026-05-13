@@ -61,7 +61,7 @@ COPY . .
 
 # Generate Prisma client (needs the schema file and DATABASE_URL for validation)
 # Using a dummy URL since we only need the generated types at build time
-ENV DATABASE_URL=***REMOVED***
+ENV DATABASE_URL="postgresql://postgres:postgres@localhost:5432/omnitool?schema=public"
 
 RUN pnpm db:generate
 

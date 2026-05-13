@@ -15,9 +15,8 @@ build
 dist
 
 # env files
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
 
 # debug
 npm-debug.log*
@@ -50,6 +49,12 @@ apps/web/public/serwist-worker-*.js
 coverage/
 .vercel
 supabase/.temp/
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
 
 # playwright MCP logs
 .playwright-mcp/

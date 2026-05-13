@@ -2,7 +2,7 @@
 # Switch to local Docker Postgres for development
 # Usage: source scripts/use-local-db.sh
 
-LOCAL_URL=***REMOVED***
+LOCAL_URL="postgresql://postgres:postgres@localhost:5432/omnitool?schema=public"
 
 # Update packages/database/.env (Prisma reads from here)
 cat > packages/database/.env << EOF

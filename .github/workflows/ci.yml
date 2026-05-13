@@ -16,7 +16,7 @@ concurrency:
 
 env:
   # Required for Prisma generate during build
-  DATABASE_URL: ***REMOVED***
+  DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/omnitool?schema=public"
   # Dummy auth secret so Next.js build doesn't fail on missing env
   AUTH_SECRET: "ci-placeholder-secret-not-for-production"
   AUTH_URL: "http://localhost:3000"
@@ -192,7 +192,7 @@ jobs:
     if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'e2e')
     needs: ci
     env:
-      DATABASE_URL: ${{ secrets.E2E_DATABASE_URL || '***REMOVED***' }}
+      DATABASE_URL: ${{ secrets.E2E_DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/omnitool?schema=public' }}
       AUTH_SECRET: "ci-placeholder-secret-not-for-production"
       AUTH_URL: "http://localhost:19283"
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.E2E_SUPABASE_URL }}

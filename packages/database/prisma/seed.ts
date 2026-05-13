@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 // Ensure DATABASE_URL is set for local PostgreSQL development.
 if (!process.env.DATABASE_URL) {
   process.env.DATABASE_URL =
-    ***REMOVED***;
+    "postgresql://postgres:postgres@localhost:5432/omnitool?schema=public";
 }
 
 const prisma = new PrismaClient();
@@ -12,8 +12,11 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("Seeding database...");
 
-  // Create admin user
-  const hashedPassword = await bcrypt.hash("admin123!", 12);
+  // Create sample admin user. Password hashes are opt-in for local seeds only.
+  const seedAdminPassword = process.env.SEED_ADMIN_PASSWORD;
+  const hashedPassword = seedAdminPassword
+    ? await bcrypt.hash(seedAdminPassword, 12)
+    : null;
   const admin = await prisma.user.upsert({
     where: { email: "admin@omnitool.dev" },
     update: {},

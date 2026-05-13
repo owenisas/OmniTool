@@ -74,7 +74,7 @@ pnpm typecheck      # Type-check all packages
 - **Auth pages**: `/login`, `/signup`, `/reset-password`, `/update-password` — all under `apps/web/app/(auth)/`
 - **PKCE callback**: `apps/web/app/api/auth/callback/route.ts` — exchanges auth code for session (email confirmation, password reset)
 - **Password change**: Settings → Security uses `supabase.auth.updateUser({ password })` directly (no tRPC)
-- **Default admin**: `admin@omnitool.dev` / `admin123!` (Supabase Auth user ID: `e5c387c2-3981-42a4-be64-f13c7d64be64`)
+- **Local seed admin**: `admin@omnitool.dev`; set `SEED_ADMIN_PASSWORD` before seeding if a local password hash is needed.
 
 ## App Targets
 
@@ -111,7 +111,7 @@ pnpm typecheck      # Type-check all packages
 - Use `pnpm db:push` for quick schema sync (no migration file)
 - Use `pnpm db:migrate` for local migration authoring
 - Use `pnpm db:deploy` for production migration application
-- Default admin: admin@omnitool.dev / admin123!
+- Local seed admin: admin@omnitool.dev; set `SEED_ADMIN_PASSWORD` before seeding if a local password hash is needed.
 - User model has `supabaseAuthId` (unique) linking to Supabase Auth. `passwordHash` column is deprecated (kept for migration safety).
 
 ## Local-First Sync

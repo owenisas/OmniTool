@@ -52,8 +52,8 @@ pnpm install
 Create `.env` from `.env.example` and configure at least:
 
 ```bash
-DATABASE_URL=***REMOVED***
-AUTH_SECRET=***REMOVED***
+DATABASE_URL=""
+AUTH_SECRET=""
 AUTH_URL="http://localhost:3000"
 ```
 
@@ -71,11 +71,9 @@ pnpm db:push
 pnpm db:seed
 ```
 
-Default admin login:
-
-```text
-admin@omnitool.dev / admin123!
-```
+The seed script creates sample data for local development. It does not ship
+production credentials; set `SEED_ADMIN_PASSWORD` before `pnpm db:seed` if you
+want a local password hash on the seeded admin user.
 
 ## Running the apps
 
