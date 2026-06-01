@@ -259,6 +259,12 @@ model Note {
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+  /// Full-text search vector: a DB-managed GENERATED column populated from
+  /// title (weight A) + contentText (weight B), defined in
+  /// supabase/migrations/20260506_fulltext_search.sql. Modeled as Unsupported
+  /// so `prisma db push` / `migrate` never tries to DROP it (Prisma can't
+  /// express a GENERATED column). Read only via raw SQL in note.searchNotes.
+  search_vector   Unsupported("tsvector")?
 
   author          User              @relation(fields: [authorId], references: [id])
   team            Team?             @relation(fields: [teamId], references: [id], onDelete: Cascade)
@@ -286,6 +292,7 @@ model Note {
   @@index([teamId, notionPageId])
   @@index([linkedProjectId])
   @@index([authorId, deletedAt])
+  @@index([search_vector], type: Gin, map: "idx_notes_search_vector")
   @@map("notes")
 }
 
