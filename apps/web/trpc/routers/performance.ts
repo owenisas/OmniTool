@@ -2,6 +2,12 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createTRPCRouter, protectedProcedure } from "../init";
 import type { PrismaClient } from "@omnitool/database";
+import {
+  WIP_STATUSES,
+  computeCycleTimeStats,
+  computeWeeklyThroughput,
+  getWeekStart,
+} from "./performance-flow";
 
 async function assertProjectTeamMembership(
   prisma: PrismaClient,
@@ -67,7 +73,13 @@ export const performanceRouter = createTRPCRouter({
     }),
 
   getDashboardStats: protectedProcedure
-    .input(z.object({ projectId: z.string() }))
+    .input(
+      z.object({
+        projectId: z.string(),
+        // Window for the throughput series (tasks reaching DONE per week).
+        throughputWeeks: z.number().min(1).max(52).default(8),
+      })
+    )
     .query(async ({ ctx, input }) => {
       await assertProjectTeamMembership(
         ctx.prisma,
@@ -75,23 +87,71 @@ export const performanceRouter = createTRPCRouter({
         input.projectId
       );
 
-      const [totalTasks, completedTasks, openIssues, totalTimeEntries] =
-        await Promise.all([
-          ctx.prisma.task.count({ where: { projectId: input.projectId } }),
-          ctx.prisma.task.count({
-            where: { projectId: input.projectId, status: "DONE" },
-          }),
-          ctx.prisma.issue.count({
-            where: {
-              projectId: input.projectId,
-              status: { in: ["OPEN", "TRIAGED", "IN_PROGRESS"] },
-            },
-          }),
-          ctx.prisma.timeEntry.aggregate({
-            where: { task: { projectId: input.projectId } },
-            _sum: { duration: true },
-          }),
-        ]);
+      const throughputStart = new Date();
+      throughputStart.setDate(throughputStart.getDate() - input.throughputWeeks * 7);
+      throughputStart.setHours(0, 0, 0, 0);
+
+      const [
+        totalTasks,
+        completedTasks,
+        openIssues,
+        totalTimeEntries,
+        cycleTimeTasks,
+        currentWip,
+        throughputTasks,
+      ] = await Promise.all([
+        ctx.prisma.task.count({ where: { projectId: input.projectId } }),
+        ctx.prisma.task.count({
+          where: { projectId: input.projectId, status: "DONE" },
+        }),
+        ctx.prisma.issue.count({
+          where: {
+            projectId: input.projectId,
+            status: { in: ["OPEN", "TRIAGED", "IN_PROGRESS"] },
+          },
+        }),
+        ctx.prisma.timeEntry.aggregate({
+          where: { task: { projectId: input.projectId } },
+          _sum: { duration: true },
+        }),
+        ctx.prisma.task.findMany({
+          where: {
+            projectId: input.projectId,
+            status: "DONE",
+            firstStartedAt: { not: null },
+            completedAt: { not: null },
+          },
+          select: { firstStartedAt: true, completedAt: true },
+        }),
+        // WIP = tasks currently in-flight (IN_PROGRESS + IN_REVIEW).
+        ctx.prisma.task.count({
+          where: {
+            projectId: input.projectId,
+            status: { in: [...WIP_STATUSES] },
+          },
+        }),
+        // Throughput = tasks that reached DONE within the window, bucketed by
+        // completion week.
+        ctx.prisma.task.findMany({
+          where: {
+            projectId: input.projectId,
+            status: "DONE",
+            completedAt: { not: null, gte: throughputStart },
+          },
+          select: { completedAt: true },
+        }),
+      ]);
+
+      // Cycle time = completedAt - firstStartedAt (seconds), for DONE tasks
+      // that recorded a start. Flow metric per the "flow over velocity" guidance.
+      const { avgCycleTime, medianCycleTime, cycleTimeSampleSize } =
+        computeCycleTimeStats(cycleTimeTasks);
+
+      const throughputByWeek = computeWeeklyThroughput(throughputTasks);
+      const throughputTotal = throughputTasks.length;
+      const throughputWeeks = input.throughputWeeks;
+      const throughputPerWeek =
+        throughputWeeks > 0 ? throughputTotal / throughputWeeks : 0;
 
       return {
         totalTasks,
@@ -100,6 +160,15 @@ export const performanceRouter = createTRPCRouter({
           totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0,
         openIssues,
         totalTimeLogged: totalTimeEntries._sum.duration ?? 0,
+        avgCycleTime,
+        medianCycleTime,
+        cycleTimeSampleSize,
+        // Flow metrics
+        currentWip,
+        throughputTotal,
+        throughputWeeks,
+        throughputPerWeek,
+        throughputByWeek,
       };
     }),
 
@@ -176,11 +245,3 @@ export const performanceRouter = createTRPCRouter({
         .sort((a, b) => a.week.localeCompare(b.week));
     }),
 });
-
-function getWeekStart(date: Date): Date {
-  const d = new Date(date);
-  const day = d.getDay();
-  d.setDate(d.getDate() - day);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}

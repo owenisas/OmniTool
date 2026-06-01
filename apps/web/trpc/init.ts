@@ -46,9 +46,66 @@ const t = initTRPC.context<typeof createTRPCContext>().create({
 });
 
 export const createTRPCRouter = t.router;
-export const publicProcedure = t.procedure;
 
-export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+/**
+ * OpenTelemetry span middleware: wraps each tRPC call in a span named after
+ * the procedure path, tagging procedure type and ok/error outcome. Spans nest
+ * under the request span emitted by `@vercel/otel` (registered in
+ * `instrumentation.ts`), and Prisma queries nest under this span, giving
+ * frontend → RPC → DB visibility.
+ *
+ * No-op-safe by design: the OTel API is loaded lazily and, if unavailable (deps
+ * not installed, edge runtime, init failure), the middleware falls straight
+ * through to `next()`. It never alters procedure semantics or error handling —
+ * errors are recorded on the span and re-thrown unchanged.
+ */
+const tracingMiddleware = t.middleware(async ({ path, type, next }) => {
+  let trace: typeof import("@opentelemetry/api").trace | undefined;
+  let SpanStatusCode:
+    | typeof import("@opentelemetry/api").SpanStatusCode
+    | undefined;
+  try {
+    ({ trace, SpanStatusCode } = await import("@opentelemetry/api"));
+  } catch {
+    // OTel API not available — trace nothing, change nothing.
+    return next();
+  }
+
+  const tracer = trace.getTracer("trpc");
+  return tracer.startActiveSpan(`trpc.${path}`, async (span) => {
+    span.setAttribute("trpc.path", path);
+    span.setAttribute("trpc.type", type);
+    try {
+      const result = await next();
+      // tRPC's middleware result carries `ok` rather than throwing for some
+      // handled outcomes; reflect that on the span without altering it.
+      if (result.ok) {
+        span.setStatus({ code: SpanStatusCode!.OK });
+      } else {
+        span.setStatus({ code: SpanStatusCode!.ERROR });
+        span.recordException(result.error);
+      }
+      return result;
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode!.ERROR });
+      span.recordException(err instanceof Error ? err : String(err));
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+});
+
+/**
+ * Base procedure with tracing applied. All public/protected procedures derive
+ * from this so every tRPC call is spanned. The tracing middleware is a no-op
+ * when OTel isn't active, so this is safe in every runtime.
+ */
+const tracedProcedure = t.procedure.use(tracingMiddleware);
+
+export const publicProcedure = tracedProcedure;
+
+export const protectedProcedure = tracedProcedure.use(({ ctx, next }) => {
   if (!ctx.session?.user?.id) {
     throw new TRPCError({ code: "UNAUTHORIZED" });
   }

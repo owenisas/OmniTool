@@ -9,6 +9,20 @@ const Select = SelectPrimitive.Root;
 const SelectGroup = SelectPrimitive.Group;
 const SelectValue = SelectPrimitive.Value;
 
+/**
+ * `SelectTrigger` forwards `aria-invalid` and `aria-describedby` to the
+ * underlying Radix trigger button (via the spread props). Set `aria-invalid`
+ * on the trigger to render the destructive error styling and point
+ * `aria-describedby` at an error/help message id so screen readers announce
+ * it. Fully backward compatible — no visual change unless `aria-invalid` is
+ * truthy. Example:
+ *
+ * ```tsx
+ * <SelectTrigger aria-invalid={!!error} aria-describedby={error ? "role-error" : undefined}>
+ *   <SelectValue placeholder="Pick a role" />
+ * </SelectTrigger>
+ * ```
+ */
 const SelectTrigger = React.forwardRef<
   React.ComponentRef<typeof SelectPrimitive.Trigger>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
@@ -17,6 +31,7 @@ const SelectTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1",
+      "aria-invalid:border-destructive aria-invalid:focus:ring-destructive",
       className
     )}
     {...props}

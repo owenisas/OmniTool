@@ -173,3 +173,96 @@
 .bn-editor .bn-visual-media-wrapper .bn-resize-handle:hover {
   background: hsl(var(--muted-foreground) / 0.7) !important;
 }
+
+/* ─── Reduced-motion guard (WCAG 2.3.3) ─────────────────────────────────
+ * When the OS requests reduced motion, neutralize animation/transition
+ * durations app-wide. This is the global backstop that complements the
+ * per-component `motion-reduce:animate-none` handling (e.g. PageTransition
+ * in apps/web/components/layout/page-transition.tsx) and any third-party
+ * styles (BlockNote, shadcn/ui, tailwindcss-animate) that don't opt into
+ * the `motion-reduce` variant themselves.
+ *
+ * We collapse durations to ~0 rather than `animation: none` so JS that
+ * waits on `animationend`/`transitionend` events still fires. `scroll-behavior`
+ * is forced to `auto` so programmatic smooth-scrolls jump instead of glide.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ─── Micro-interaction animation tokens ────────────────────────────────
+ * Lightweight, dependency-free keyframes + utility classes for richer list
+ * and card reveals (complements tailwindcss-animate's `animate-in` set).
+ *
+ * Reduced-motion: these are intentionally declared AFTER the
+ * `prefers-reduced-motion` guard above. That guard's universal selector
+ * collapses `animation-duration` to ~0 for everything, so these utilities
+ * resolve to an instant final state for users who request reduced motion —
+ * no per-token gating needed. The `forwards` fill keeps the element at its
+ * resting (fully visible) state once the (possibly instant) run completes,
+ * so reduced-motion users never see a stuck pre-animation frame.
+ */
+@keyframes omni-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes omni-blur-fade {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@layer utilities {
+  /* Fade + 6px upward slide. Pair with `.omni-stagger` on a parent to cascade
+   * children, or set `--omni-delay` inline for a single element. */
+  .omni-fade-up {
+    animation: omni-fade-up 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--omni-delay, 0ms);
+  }
+
+  /* Soft blur-in reveal — good for cards / media coming into view. */
+  .omni-blur-fade {
+    animation: omni-blur-fade 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--omni-delay, 0ms);
+  }
+
+  /* Stagger helper: applies an incremental delay to direct children that carry
+   * an `.omni-fade-up` / `.omni-blur-fade` class. Up to 8 steps (~45ms each)
+   * before delays cap, which keeps long lists from feeling sluggish.
+   * Usage:
+   *   <ul class="omni-stagger">
+   *     <li class="omni-fade-up">…</li>   // delay 0ms
+   *     <li class="omni-fade-up">…</li>   // delay 45ms
+   *   </ul>
+   */
+  .omni-stagger > * {
+    animation-delay: calc(var(--omni-stagger-step, 45ms) * 0);
+  }
+  .omni-stagger > *:nth-child(1) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 0); }
+  .omni-stagger > *:nth-child(2) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 1); }
+  .omni-stagger > *:nth-child(3) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 2); }
+  .omni-stagger > *:nth-child(4) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 3); }
+  .omni-stagger > *:nth-child(5) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 4); }
+  .omni-stagger > *:nth-child(6) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 5); }
+  .omni-stagger > *:nth-child(7) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 6); }
+  .omni-stagger > *:nth-child(n + 8) { --omni-delay: calc(var(--omni-stagger-step, 45ms) * 7); }
+}

@@ -40,6 +40,12 @@ import { NoteHistorySheet } from "./note-history-sheet";
 import { useSidebar } from "@/components/layout/sidebar-context";
 import { cn } from "@/lib/utils";
 import { NoteTagEditor } from "./note-tag-editor";
+import { isLargePaste } from "@/lib/notes/paste-threshold";
+import {
+  PasteSortPrompt,
+  type PasteSortAnchor,
+} from "./capture/paste-sort-prompt";
+import { useAutoFileToast } from "./capture/auto-file-toast";
 
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/shadcn/style.css";
@@ -386,6 +392,159 @@ export function NoteBlockEditor({
     }, AUTOSAVE_MS);
   }, [flush]);
 
+  // ─── In-editor paste auto-sort ───────────────────────────────────────
+  //
+  // A LARGE paste (per the user's `autoSortPaste` pref + threshold) offers to
+  // file the pasted text into its own note. CRITICAL SAFETY: the paste listener
+  // is PASSIVE — it never calls `preventDefault`. BlockNote's default paste
+  // (markdown, URL→embed, formatting) runs untouched; we only read the plain
+  // text and, after the paste lands, anchor a small prompt to the new block(s).
+  const { data: notePref } = trpc.userNotePreference.get.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const autoSortEnabled = notePref?.autoSortPaste ?? false;
+  const autoSortThreshold = notePref?.autoSortPasteThreshold ?? 280;
+  const autoSortKeepOriginal = notePref?.autoSortPasteKeepOriginal ?? false;
+  // Keep latest pref values in a ref so the (long-lived) paste listener reads
+  // current settings without re-subscribing on every pref change.
+  const autoSortRef = useRef({
+    enabled: autoSortEnabled,
+    threshold: autoSortThreshold,
+    keepOriginal: autoSortKeepOriginal,
+  });
+  useEffect(() => {
+    autoSortRef.current = {
+      enabled: autoSortEnabled,
+      threshold: autoSortThreshold,
+      keepOriginal: autoSortKeepOriginal,
+    };
+  }, [autoSortEnabled, autoSortThreshold, autoSortKeepOriginal]);
+
+  const autoFileMutation = trpc.note.autoFile.useMutation();
+  const { show: showAutoFile, dialog: autoFileDialog } = useAutoFileToast();
+
+  // Prompt anchor + the captured paste payload (pending Sort decision).
+  const [pasteAnchor, setPasteAnchor] = useState<PasteSortAnchor | null>(null);
+  const pendingPasteRef = useRef<{
+    text: string;
+    /** Block ids that existed BEFORE the paste — used to diff out new blocks. */
+    priorIds: Set<string>;
+  } | null>(null);
+
+  const dismissPastePrompt = useCallback(() => {
+    setPasteAnchor(null);
+    pendingPasteRef.current = null;
+  }, []);
+
+  // Passive paste listener. Reads clipboard text, lets the default paste run,
+  // then (if the pref is on and the paste is note-sized) anchors the prompt.
+  useEffect(() => {
+    const dom = editor.domElement;
+    if (!dom) return;
+
+    function onPaste(e: ClipboardEvent) {
+      // NEVER preventDefault — default BlockNote paste must run untouched.
+      if (!autoSortRef.current.enabled) return;
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (!isLargePaste(text, autoSortRef.current.threshold)) return;
+
+      // Snapshot the doc BEFORE BlockNote applies the paste so we can diff the
+      // new blocks afterward.
+      const priorIds = new Set(editor.document.map((b) => b.id));
+
+      // Defer to after the default paste has landed, then anchor to the new
+      // block(s). Two RAFs to clear BlockNote's async paste handling.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          pendingPasteRef.current = { text, priorIds };
+          // Anchor to the current cursor block (last inserted), falling back to
+          // the editor container.
+          let rect: DOMRect | null = null;
+          try {
+            const cursor = editor.getTextCursorPosition();
+            const el = dom!.querySelector<HTMLElement>(
+              `[data-id="${cursor.block.id}"]`,
+            );
+            rect = el?.getBoundingClientRect() ?? null;
+          } catch {
+            rect = null;
+          }
+          if (!rect) rect = dom!.getBoundingClientRect();
+          setPasteAnchor({ rect });
+        });
+      });
+    }
+
+    dom.addEventListener("paste", onPaste);
+    return () => dom.removeEventListener("paste", onPaste);
+  }, [editor]);
+
+  const handlePasteSort = useCallback(() => {
+    const pending = pendingPasteRef.current;
+    setPasteAnchor(null);
+    if (!pending) return;
+    pendingPasteRef.current = null;
+
+    // Compute the blocks inserted by the paste (those not in the prior set).
+    const newBlocks = editor.document.filter((b) => !pending.priorIds.has(b.id));
+    const keepOriginal = autoSortRef.current.keepOriginal;
+
+    autoFileMutation.mutate(
+      { text: pending.text, sourceNoteId: note.id },
+      {
+        onSuccess: (result) => {
+          if (!keepOriginal && newBlocks.length > 0) {
+            // Anchor the re-insert point at the block BEFORE the first new one
+            // so Undo can put them back in the same spot.
+            const firstIdx = editor.document.findIndex(
+              (b) => b.id === newBlocks[0]!.id,
+            );
+            const afterBlock =
+              firstIdx > 0 ? editor.document[firstIdx - 1] : null;
+            const removedSnapshot = newBlocks.map((b) => ({ ...b }));
+
+            editor.removeBlocks(newBlocks.map((b) => b.id));
+            scheduleSave();
+
+            showAutoFile(result, {
+              removedBlocks: () => {
+                // Re-insert the removed blocks on Undo.
+                try {
+                  if (afterBlock && editor.getBlock(afterBlock.id)) {
+                    editor.insertBlocks(
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      removedSnapshot as any,
+                      afterBlock.id,
+                      "after",
+                    );
+                  } else {
+                    const first = editor.document[0];
+                    if (first) {
+                      editor.insertBlocks(
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        removedSnapshot as any,
+                        first.id,
+                        "before",
+                      );
+                    }
+                  }
+                  scheduleSave();
+                } catch (err) {
+                  console.error("[note] paste-sort undo re-insert failed", err);
+                }
+              },
+            });
+          } else {
+            showAutoFile(result);
+          }
+        },
+        onError: (err) => {
+          console.error("[note] paste auto-file failed", err);
+        },
+      },
+    );
+  }, [editor, note.id, autoFileMutation, scheduleSave, showAutoFile]);
+
   // ─── Orphan-children auto-migration ──────────────────────────────────
   //
   // Notes created before the inline-`noteEmbed` model exist as `parentId`
@@ -596,6 +755,12 @@ export function NoteBlockEditor({
           />
         </BlockNoteView>
         <InlineAIPrompt editor={editor} />
+        <PasteSortPrompt
+          anchor={pasteAnchor}
+          onSort={handlePasteSort}
+          onKeep={dismissPastePrompt}
+        />
+        {autoFileDialog}
       </div>
 
       <NoteCommentsPanelWithUser

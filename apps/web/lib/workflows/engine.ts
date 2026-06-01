@@ -1,5 +1,8 @@
 import { prisma } from "@omnitool/database";
 import type { Prisma } from "@omnitool/database";
+import { createLogger } from "@/lib/observability/logger";
+
+const log = createLogger("workflow");
 
 // ─── Public API ─────────────────────────────────────────────
 
@@ -114,6 +117,11 @@ export async function executeWorkflowRun(runId: string): Promise<void> {
     });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    log.error("Workflow run failed", err, {
+      runId,
+      workflowId: run.workflowId,
+      currentStep,
+    });
     await prisma.workflowRun.update({
       where: { id: runId },
       data: {
@@ -208,6 +216,7 @@ async function executeAgentStep(
       output: { agentType, text: result.text },
     };
   } catch (err) {
+    log.error("Agent step failed", err, { agentType: config.agentType });
     return {
       status: "ok",
       output: {
@@ -246,6 +255,7 @@ async function executeActionStep(
         await sendSlackMessage(client, channel, text);
         return { status: "ok", output: { sent: true, channel } };
       } catch (err) {
+        log.error("Action send_slack failed", err);
         return {
           status: "ok",
           output: { sent: false, error: String(err) },
@@ -327,6 +337,7 @@ async function executeActionStep(
           output: { pageId: result.id, url: result.url },
         };
       } catch (err) {
+        log.error("Action create_notion_page failed", err);
         return {
           status: "ok",
           output: { created: false, error: String(err) },
@@ -348,6 +359,7 @@ async function executeActionStep(
         await appendNotionBlock(userId, { pageId, content });
         return { status: "ok", output: { appended: true, pageId } };
       } catch (err) {
+        log.error("Action append_notion_block failed", err);
         return {
           status: "ok",
           output: { appended: false, error: String(err) },

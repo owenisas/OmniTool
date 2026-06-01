@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { trpc } from "@/trpc/client";
 import { groupByParent, persistExpanded, readExpanded } from "@/lib/notes/tree";
 import { getEmptyNoteBlocks } from "@/lib/note-blocks";
-import { Button } from "@omnitool/ui/components/button";
+import { IconButton } from "@omnitool/ui/components/icon-button";
 import type { AppRouter } from "@/trpc/routers/_app";
 
 type TreeNote = inferRouterOutputs<AppRouter>["note"]["list"][number];
@@ -252,10 +252,9 @@ export function SidebarNoteTree({
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
           Pages
         </span>
-        <Button
+        <IconButton
           type="button"
           variant="ghost"
-          size="icon"
           className="h-5 w-5 text-muted-foreground hover:text-foreground"
           onClick={createRoot}
           disabled={createMutation.isPending}
@@ -267,7 +266,7 @@ export function SidebarNoteTree({
           ) : (
             <FilePlus2 className="h-3 w-3" />
           )}
-        </Button>
+        </IconButton>
       </div>
 
       {isLoading ? (

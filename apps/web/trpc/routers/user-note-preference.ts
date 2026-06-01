@@ -52,6 +52,11 @@ export const userNotePreferenceRouter = createTRPCRouter({
         sortBy: "updatedDesc" as SortBy,
         groupBy: "none" as GroupBy,
         activeTeamspaceId: null as string | null,
+        inboxNoteParentId: null as string | null,
+        autoSortPaste: false,
+        autoSortPasteThreshold: 280,
+        autoSortPasteKeepOriginal: false,
+        defaultCaptureTeamId: null as string | null,
         createdAt: new Date(),
         updatedAt: new Date(),
       }
@@ -67,6 +72,10 @@ export const userNotePreferenceRouter = createTRPCRouter({
         sortBy: sortBySchema.optional(),
         groupBy: groupBySchema.optional(),
         activeTeamspaceId: z.string().cuid().nullable().optional(),
+        autoSortPaste: z.boolean().optional(),
+        autoSortPasteThreshold: z.number().int().min(40).max(5000).optional(),
+        autoSortPasteKeepOriginal: z.boolean().optional(),
+        defaultCaptureTeamId: z.string().cuid().nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -89,18 +98,19 @@ export const userNotePreferenceRouter = createTRPCRouter({
         }
       }
 
-      // Validate activeTeamspaceId is a teamspace the user belongs to.
-      if (input.activeTeamspaceId) {
-        const membership = await ctx.prisma.teamMember.findUnique({
-          where: {
-            userId_teamId: {
-              userId: ctx.userId,
-              teamId: input.activeTeamspaceId,
-            },
-          },
-        });
-        if (!membership) {
-          throw new Error("You are not a member of that teamspace");
+      // Validate activeTeamspaceId / defaultCaptureTeamId are teamspaces the
+      // user belongs to.
+      for (const teamId of [
+        input.activeTeamspaceId,
+        input.defaultCaptureTeamId,
+      ]) {
+        if (teamId) {
+          const membership = await ctx.prisma.teamMember.findUnique({
+            where: { userId_teamId: { userId: ctx.userId, teamId } },
+          });
+          if (!membership) {
+            throw new Error("You are not a member of that teamspace");
+          }
         }
       }
 
@@ -114,6 +124,10 @@ export const userNotePreferenceRouter = createTRPCRouter({
           sortBy: input.sortBy ?? "updatedDesc",
           groupBy: input.groupBy ?? "none",
           activeTeamspaceId: input.activeTeamspaceId ?? null,
+          autoSortPaste: input.autoSortPaste ?? false,
+          autoSortPasteThreshold: input.autoSortPasteThreshold ?? 280,
+          autoSortPasteKeepOriginal: input.autoSortPasteKeepOriginal ?? false,
+          defaultCaptureTeamId: input.defaultCaptureTeamId ?? null,
         },
         update: {
           ...(input.autoCreateProjectNotes !== undefined
@@ -127,6 +141,18 @@ export const userNotePreferenceRouter = createTRPCRouter({
           ...(input.groupBy !== undefined ? { groupBy: input.groupBy } : {}),
           ...(input.activeTeamspaceId !== undefined
             ? { activeTeamspaceId: input.activeTeamspaceId }
+            : {}),
+          ...(input.autoSortPaste !== undefined
+            ? { autoSortPaste: input.autoSortPaste }
+            : {}),
+          ...(input.autoSortPasteThreshold !== undefined
+            ? { autoSortPasteThreshold: input.autoSortPasteThreshold }
+            : {}),
+          ...(input.autoSortPasteKeepOriginal !== undefined
+            ? { autoSortPasteKeepOriginal: input.autoSortPasteKeepOriginal }
+            : {}),
+          ...(input.defaultCaptureTeamId !== undefined
+            ? { defaultCaptureTeamId: input.defaultCaptureTeamId }
             : {}),
         },
       });

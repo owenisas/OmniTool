@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@omnitool/ui/components/button";
+import { IconButton } from "@omnitool/ui/components/icon-button";
 import { Menu, Search } from "lucide-react";
 import { trpc } from "@/trpc/client";
 import { useSidebar } from "./sidebar-context";
@@ -83,15 +84,14 @@ export function Topbar() {
   return (
     <header className="flex h-14 items-center gap-3 border-b bg-card px-4 md:px-6">
       {/* Mobile hamburger menu */}
-      <Button
+      <IconButton
         variant="ghost"
-        size="icon"
         className="md:hidden shrink-0"
         onClick={open}
         aria-label="Open navigation menu"
       >
         <Menu className="h-5 w-5" />
-      </Button>
+      </IconButton>
 
       {/* Breadcrumb path bar — flexes to consume free space, truncates if needed */}
       <div className="flex min-w-0 flex-1 items-center">

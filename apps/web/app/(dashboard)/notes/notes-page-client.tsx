@@ -42,6 +42,10 @@ import { TopbarSlot } from "@/components/layout/topbar-slot";
 import { MoveNoteDialog } from "@/components/notes/move-note-dialog";
 import { NotesViewControls } from "@/components/notes/notes-view-controls";
 import { TeamspaceSwitcher } from "@/components/notes/teamspace-switcher";
+import { RecentCapturesProvider } from "@/components/notes/capture/recent-captures-context";
+import { QuickCaptureBox } from "@/components/notes/capture/quick-capture-box";
+import { RecentCapturesList } from "@/components/notes/capture/recent-captures-list";
+import { ReorganizeDialog } from "@/components/notes/capture/reorganize-dialog";
 import { useNotesRealtime } from "@/lib/notes/use-realtime";
 import { NotesCalendarView } from "@/components/notes/views/notes-calendar-view";
 import { NotesCardsView } from "@/components/notes/views/notes-cards-view";
@@ -403,6 +407,7 @@ export function NotesPageClient() {
   const [viewPrefs, setViewPrefs] = useState<ViewPrefs>(DEFAULT_VIEW_PREFS);
   const [showFilterBar, setShowFilterBar] = useState(false);
   const [filterState, setFilterState] = useState<FilterBuilderState>(EMPTY_FILTER);
+  const [reorganizeOpen, setReorganizeOpen] = useState(false);
   const activeFilter = toNoteFilter(filterState);
 
   const utils = trpc.useUtils();
@@ -629,6 +634,7 @@ export function NotesPageClient() {
     !isLoading && notes && notes.length === 0 && !isFiltering;
 
   return (
+    <RecentCapturesProvider>
     <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
       <TopbarSlot target="actions">
         <Button
@@ -738,6 +744,9 @@ export function NotesPageClient() {
       </aside>
 
       <section className="min-w-0 flex-1 space-y-6">
+        <QuickCaptureBox defaultTeamId={viewPrefs.activeTeamspaceId} />
+        <RecentCapturesList />
+
         {showEmptyState ? (
           <div className="flex min-h-[60vh] flex-col items-center justify-center rounded-lg border bg-card p-8 text-center">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -777,22 +786,34 @@ export function NotesPageClient() {
           </div>
         ) : (
           <>
-            <NotesViewControls
-              viewMode={viewPrefs.viewMode}
-              sortBy={viewPrefs.sortBy}
-              groupBy={viewPrefs.groupBy}
-              onViewModeChange={(v) => applyViewPrefs({ viewMode: v })}
-              onSortByChange={(v) => applyViewPrefs({ sortBy: v })}
-              onGroupByChange={(v) => applyViewPrefs({ groupBy: v })}
-              filterActive={activeFilter !== null || showFilterBar}
-              onToggleFilter={() => {
-                setShowFilterBar((prev) => {
-                  // Collapsing the bar clears filters so the list reverts.
-                  if (prev) setFilterState(EMPTY_FILTER);
-                  return !prev;
-                });
-              }}
-            />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <NotesViewControls
+                viewMode={viewPrefs.viewMode}
+                sortBy={viewPrefs.sortBy}
+                groupBy={viewPrefs.groupBy}
+                onViewModeChange={(v) => applyViewPrefs({ viewMode: v })}
+                onSortByChange={(v) => applyViewPrefs({ sortBy: v })}
+                onGroupByChange={(v) => applyViewPrefs({ groupBy: v })}
+                filterActive={activeFilter !== null || showFilterBar}
+                onToggleFilter={() => {
+                  setShowFilterBar((prev) => {
+                    // Collapsing the bar clears filters so the list reverts.
+                    if (prev) setFilterState(EMPTY_FILTER);
+                    return !prev;
+                  });
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setReorganizeOpen(true)}
+                title="Let AI file loose top-level notes into sections"
+              >
+                <FolderTree className="mr-1 h-4 w-4" />
+                Organize loose notes
+              </Button>
+            </div>
 
             {showFilterBar && (
               <NoteFilterBuilder
@@ -904,6 +925,13 @@ export function NotesPageClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ReorganizeDialog
+        open={reorganizeOpen}
+        onOpenChange={setReorganizeOpen}
+        teamId={viewPrefs.activeTeamspaceId}
+      />
     </div>
+    </RecentCapturesProvider>
   );
 }

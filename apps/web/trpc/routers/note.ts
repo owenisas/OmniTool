@@ -24,6 +24,11 @@ import {
   reindexSiblings,
   syncNoteLinks,
 } from "@/lib/notes/router-helpers";
+import { searchNotesCore } from "@/lib/notes/search";
+import { planAutoFile, deriveTitle, type AutoFilePlan } from "@/lib/notes/auto-file-pipeline";
+import { resolveOrCreateSection } from "@/lib/notes/section-resolver";
+import { normalizeSectionTitle } from "@/lib/notes/fuzzy-title";
+import { markdownToBlocksServer, blocksToPlainText } from "@omnitool/ai/utils";
 import { emitActivityEvent } from "@/lib/activity/emit";
 
 const noteListSelect = {
@@ -53,110 +58,82 @@ const linkedProjectSelect = {
   targetDate: true,
 } as const;
 
+/** Run `fn` over `items` with a bounded concurrency, preserving input order. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]!);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, worker),
+  );
+  return results;
+}
 
 /**
- * ILIKE fallback for short queries (1-2 chars) or when full-text search
- * returns zero rows. Mirrors the legacy search behavior: title hits first,
- * then body hits, deduped, capped at `limit`.
+ * Resolve the teamspace a capture should land in. Explicit `requested` must be
+ * one the user belongs to; otherwise fall back to the user's default-capture
+ * preference, then the active team cookie, then their personal teamspace.
+ * Mirrors the default/guard logic in `note.create`.
  */
-async function searchNotesIlike(
-  ctx: { prisma: typeof import("@omnitool/database").prisma; teamspaceIds: string[] },
-  q: string,
-  limit: number,
-  offset: number,
-) {
-  const [titleHits, bodyHits] = await Promise.all([
-    ctx.prisma.note.findMany({
-      where: {
-        teamId: { in: ctx.teamspaceIds },
-        deletedAt: null,
-        title: { contains: q, mode: "insensitive" },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-      skip: offset,
-      select: {
-        id: true,
-        title: true,
-        emoji: true,
-        contentText: true,
-        parentId: true,
-        updatedAt: true,
-        teamId: true,
-      },
-    }),
-    ctx.prisma.note.findMany({
-      where: {
-        teamId: { in: ctx.teamspaceIds },
-        deletedAt: null,
-        contentText: { contains: q, mode: "insensitive" },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-      skip: offset,
-      select: {
-        id: true,
-        title: true,
-        emoji: true,
-        contentText: true,
-        parentId: true,
-        updatedAt: true,
-        teamId: true,
-      },
-    }),
-  ]);
-
-  const seen = new Set<string>();
-  const results: {
-    id: string;
-    title: string;
-    emoji: string | null;
-    snippet: string;
-    parentId: string | null;
-    updatedAt: Date;
-    teamId: string | null;
-    rank: number;
-    matchedTitle: boolean;
-  }[] = [];
-
-  for (const n of titleHits) {
-    if (seen.has(n.id)) continue;
-    seen.add(n.id);
-    results.push({
-      id: n.id,
-      title: n.title,
-      emoji: n.emoji,
-      snippet: (n.contentText || "").slice(0, 160),
-      parentId: n.parentId,
-      updatedAt: n.updatedAt,
-      teamId: n.teamId,
-      rank: 1, // synthetic: title hits rank highest in ILIKE mode
-      matchedTitle: true,
-    });
+async function resolveCaptureTeamId(
+  ctx: {
+    prisma: typeof import("@omnitool/database").prisma;
+    userId: string;
+    teamspaceIds: string[];
+    activeTeamId?: string | null;
+  },
+  requested?: string,
+): Promise<string> {
+  if (requested) {
+    if (!ctx.teamspaceIds.includes(requested)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "You are not a member of that teamspace",
+      });
+    }
+    return requested;
   }
-  for (const n of bodyHits) {
-    if (seen.has(n.id)) continue;
-    seen.add(n.id);
-    const lower = n.contentText.toLowerCase();
-    const idx = lower.indexOf(q.toLowerCase());
-    const start = Math.max(0, idx - 40);
-    const snippet =
-      idx >= 0
-        ? n.contentText.slice(start, start + 160)
-        : (n.contentText || "").slice(0, 160);
-    results.push({
-      id: n.id,
-      title: n.title,
-      emoji: n.emoji,
-      snippet,
-      parentId: n.parentId,
-      updatedAt: n.updatedAt,
-      teamId: n.teamId,
-      rank: 0.5, // synthetic: body hits rank below title hits
-      matchedTitle: false,
-    });
+
+  const pref = await ctx.prisma.userNotePreference.findUnique({
+    where: { userId: ctx.userId },
+    select: { defaultCaptureTeamId: true },
+  });
+  if (
+    pref?.defaultCaptureTeamId &&
+    ctx.teamspaceIds.includes(pref.defaultCaptureTeamId)
+  ) {
+    return pref.defaultCaptureTeamId;
   }
-  return results.slice(0, limit);
+
+  if (ctx.activeTeamId && ctx.teamspaceIds.includes(ctx.activeTeamId)) {
+    return ctx.activeTeamId;
+  }
+
+  const userRow = await ctx.prisma.user.findUnique({
+    where: { id: ctx.userId },
+    select: { personalTeamId: true },
+  });
+  if (
+    userRow?.personalTeamId &&
+    ctx.teamspaceIds.includes(userRow.personalTeamId)
+  ) {
+    return userRow.personalTeamId;
+  }
+
+  if (ctx.teamspaceIds[0]) return ctx.teamspaceIds[0];
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: "No teamspace available for capture",
+  });
 }
 
 export const noteRouter = createTRPCRouter({
@@ -442,108 +419,15 @@ export const noteRouter = createTRPCRouter({
         offset: z.number().int().min(0).default(0),
       }),
     )
-    .query(async ({ ctx, input }) => {
-      const q = input.query.trim();
-      if (!q) {
-        // Empty query: return most recently updated notes.
-        const rows = await ctx.prisma.note.findMany({
-          where: { teamId: { in: ctx.teamspaceIds }, deletedAt: null },
-          orderBy: { updatedAt: "desc" },
-          take: input.limit,
-          skip: input.offset,
-          select: {
-            id: true,
-            title: true,
-            contentText: true,
-            parentId: true,
-            updatedAt: true,
-            emoji: true,
-            teamId: true,
-          },
-        });
-        return rows.map((n) => ({
-          id: n.id,
-          title: n.title,
-          emoji: n.emoji,
-          snippet: (n.contentText || "").slice(0, 160),
-          parentId: n.parentId,
-          updatedAt: n.updatedAt,
-          teamId: n.teamId,
-          rank: 0,
-          matchedTitle: false,
-        }));
-      }
-
-      // Short queries (1-2 chars): tsvector tokenization won't help -- fall
-      // back to the original ILIKE approach for substring matching.
-      if (q.length <= 2) {
-        return searchNotesIlike(ctx, q, input.limit, input.offset);
-      }
-
-      // Full-text search via the generated `search_vector` column + GIN index.
-      // `websearch_to_tsquery` supports quoted phrases, OR, - (NOT) out of the
-      // box and never raises a syntax error on user input (unlike plainto_ or
-      // raw to_tsquery).
-      if (ctx.teamspaceIds.length === 0) return [];
-
-      type FtsRow = {
-        id: string;
-        title: string;
-        emoji: string | null;
-        contentText: string;
-        parentId: string | null;
-        updatedAt: Date;
-        teamId: string | null;
-        rank: number;
-        snippet: string;
-      };
-
-      const rows = await ctx.prisma.$queryRaw<FtsRow[]>`
-        SELECT
-          n.id,
-          n.title,
-          n.emoji,
-          n."contentText",
-          n."parentId",
-          n."updatedAt",
-          n."teamId",
-          ts_rank(n.search_vector, query) AS rank,
-          ts_headline(
-            'english',
-            n."contentText",
-            query,
-            'MaxWords=30, MinWords=15, StartSel=<mark>, StopSel=</mark>'
-          ) AS snippet
-        FROM notes n, websearch_to_tsquery('english', ${q}) query
-        WHERE n.search_vector @@ query
-          AND n."teamId" IN (${Prisma.join(ctx.teamspaceIds)})
-          AND n."deletedAt" IS NULL
-        ORDER BY rank DESC
-        LIMIT ${input.limit}
-        OFFSET ${input.offset}
-      `;
-
-      // If full-text search returns nothing (e.g. all stop-words, or the
-      // query term isn't in the English dictionary), fall back to ILIKE so
-      // exact substring matches still surface.
-      if (rows.length === 0) {
-        return searchNotesIlike(ctx, q, input.limit, input.offset);
-      }
-
-      return rows.map((r) => ({
-        id: r.id,
-        title: r.title,
-        emoji: r.emoji,
-        snippet: r.snippet,
-        parentId: r.parentId,
-        updatedAt: r.updatedAt,
-        teamId: r.teamId,
-        rank: Number(r.rank),
-        // Title match heuristic: rank > 0.1 almost always means the 'A' weight
-        // (title) contributed. Not perfect but good enough for UI hints.
-        matchedTitle: Number(r.rank) > 0.1,
-      }));
-    }),
+    .query(async ({ ctx, input }) =>
+      searchNotesCore(
+        ctx.prisma,
+        ctx.teamspaceIds,
+        input.query,
+        input.limit,
+        input.offset,
+      ),
+    ),
 
   /**
    * Backlinks: notes that contain a noteMention or noteEmbed pointing at
@@ -892,6 +776,542 @@ export const noteRouter = createTRPCRouter({
 
     return created;
   }),
+
+  /**
+   * AI auto-sort: classify pasted content and file it as a child note under the
+   * best section (existing or newly created), assigning tags. Low-confidence or
+   * unconfigured-AI captures land in the Inbox. Returns enough for client undo.
+   */
+  autoFile: noteMutationProcedure
+    .input(
+      z
+        .object({
+          text: z.string().max(100_000).optional(),
+          blocks: blocksJsonSchema.optional(),
+          teamId: z.string().cuid().optional(),
+          sourceNoteId: z.string().cuid().optional(),
+          titleHint: z.string().max(200).optional(),
+        })
+        .refine((v) => v.text !== undefined || v.blocks !== undefined, {
+          message: "Provide either text or blocks to file",
+        }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const MIN_CAPTURE_CHARS = 12;
+      const teamId = await resolveCaptureTeamId(ctx, input.teamId);
+
+      const plainFromBlocks = input.blocks
+        ? blocksToPlainText(input.blocks as unknown[])
+        : "";
+      const content = (input.text ?? plainFromBlocks).trim();
+      const blocksForStorage = (input.blocks ??
+        markdownToBlocksServer(input.text ?? "")) as unknown as object;
+      const contentText = input.text ?? plainFromBlocks;
+
+      // Junk / too-short → Inbox, no LLM spend.
+      let plan: AutoFilePlan;
+      if (content.length < MIN_CAPTURE_CHARS) {
+        plan = {
+          usedFallback: true,
+          decision: {
+            kind: "inbox",
+            lowConfidence: true,
+            noteTitle: deriveTitle(content) || input.titleHint || "Quick note",
+            emoji: null,
+            tags: [],
+            summary: "",
+            confidence: 0,
+          },
+        };
+      } else {
+        plan = await planAutoFile(ctx.prisma, {
+          userId: ctx.userId,
+          teamId,
+          content,
+        });
+      }
+
+      const { note, section } = await ctx.prisma.$transaction(async (tx) => {
+        const resolved = await resolveOrCreateSection(tx, {
+          userId: ctx.userId,
+          teamId,
+          decision: plan.decision,
+        });
+        const createdNote = await tx.note.create({
+          data: {
+            title: plan.decision.noteTitle || input.titleHint || "Untitled note",
+            emoji: plan.decision.emoji,
+            authorId: ctx.userId,
+            teamId,
+            parentId: resolved.sectionId,
+            position: 0,
+            contentText,
+            blocks: blocksForStorage,
+            ...(plan.decision.tags.length && {
+              tags: {
+                connectOrCreate: plan.decision.tags.map((t) => ({
+                  where: { name: t },
+                  create: { name: t },
+                })),
+              },
+            }),
+          },
+          select: { id: true, title: true },
+        });
+        return { note: createdNote, section: resolved };
+      });
+
+      try {
+        await syncNoteLinks(ctx.prisma, note.id, blocksForStorage, ctx.userId);
+      } catch (err) {
+        console.error("[note.autoFile] link sync failed", err);
+      }
+
+      emitActivityEvent({
+        type: "note.created",
+        actorId: ctx.userId,
+        subjectType: "note",
+        subjectId: note.id,
+        payload: {
+          title: note.title,
+          autoSorted: true,
+          sectionId: section.sectionId,
+          createdSection: section.createdSectionId !== null,
+          confidence: plan.decision.confidence,
+          lowConfidence: plan.decision.lowConfidence,
+          tags: plan.decision.tags,
+          sourceNoteId: input.sourceNoteId ?? null,
+          usedFallback: plan.usedFallback,
+        },
+      });
+
+      return {
+        noteId: note.id,
+        noteTitle: note.title,
+        sectionId: section.sectionId,
+        createdSectionId: section.createdSectionId,
+        sectionTitle: section.sectionTitle,
+        tags: plan.decision.tags,
+        confidence: plan.decision.confidence,
+        lowConfidence: plan.decision.lowConfidence,
+        summary: plan.decision.summary,
+        usedFallback: plan.usedFallback,
+      };
+    }),
+
+  /**
+   * Undo an auto-file: soft-delete the captured note, and delete the section
+   * only if THIS capture created it and it's now empty (never the shared Inbox,
+   * never a section another capture filed into).
+   */
+  undoAutoFile: noteMutationProcedure
+    .input(
+      z.object({
+        noteId: z.string().cuid(),
+        createdSectionId: z.string().cuid().nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const note = await ctx.prisma.note.findFirst({
+        where: {
+          id: input.noteId,
+          teamId: { in: ctx.teamspaceIds },
+          deletedAt: null,
+        },
+        select: { id: true, teamId: true, parentId: true, title: true },
+      });
+      if (!note || !note.teamId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+      }
+
+      await ctx.prisma.note.update({
+        where: { id: note.id },
+        data: { deletedAt: new Date() },
+      });
+      await reindexSiblings(ctx.prisma, note.teamId, note.parentId);
+
+      let removedSection = false;
+      if (input.createdSectionId) {
+        const section = await ctx.prisma.note.findFirst({
+          where: {
+            id: input.createdSectionId,
+            teamId: { in: ctx.teamspaceIds },
+            deletedAt: null,
+            isAutoCreated: true,
+          },
+          select: { id: true, teamId: true, parentId: true },
+        });
+        if (section && section.teamId) {
+          const remaining = await ctx.prisma.note.count({
+            where: { parentId: section.id, deletedAt: null },
+          });
+          if (remaining === 0) {
+            await ctx.prisma.note.update({
+              where: { id: section.id },
+              data: { deletedAt: new Date() },
+            });
+            await reindexSiblings(ctx.prisma, section.teamId, section.parentId);
+            removedSection = true;
+          }
+        }
+      }
+
+      emitActivityEvent({
+        type: "note.deleted",
+        actorId: ctx.userId,
+        subjectType: "note",
+        subjectId: note.id,
+        payload: { title: note.title, undoAutoFile: true },
+      });
+
+      return { ok: true as const, removedSection };
+    }),
+
+  /**
+   * Dry-run batch reorganization: classify a page of "loose" top-level notes
+   * (no children, not auto-created sections, not project-linked) and return
+   * proposed destinations. No writes.
+   */
+  planReorganize: noteMutationProcedure
+    .input(
+      z.object({
+        teamId: z.string().cuid().optional(),
+        batchSize: z.number().int().min(1).max(10).default(6),
+        cursor: z.string().cuid().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const teamId = await resolveCaptureTeamId(ctx, input.teamId);
+
+      const loose = await ctx.prisma.note.findMany({
+        where: {
+          teamId,
+          parentId: null,
+          deletedAt: null,
+          isAutoCreated: false,
+          linkedProjectId: null,
+          children: { none: { deletedAt: null } },
+          ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+        },
+        select: { id: true, title: true, contentText: true },
+        orderBy: { id: "desc" },
+        take: input.batchSize,
+      });
+
+      const plans = await mapWithConcurrency(loose, 4, async (n) => {
+        const content = (n.contentText || n.title || "").trim();
+        const plan = await planAutoFile(ctx.prisma, {
+          userId: ctx.userId,
+          teamId,
+          content,
+        });
+        return { note: n, plan };
+      });
+
+      // Resolve titles for proposed existing-section destinations.
+      const existingSectionIds = plans
+        .map((p) => (p.plan.decision.kind === "existing" ? p.plan.decision.sectionId : null))
+        .filter((x): x is string => Boolean(x));
+      const sectionTitles = existingSectionIds.length
+        ? await ctx.prisma.note.findMany({
+            where: { id: { in: existingSectionIds } },
+            select: { id: true, title: true, emoji: true },
+          })
+        : [];
+      const titleById = new Map(sectionTitles.map((s) => [s.id, s]));
+
+      const proposals = plans.map(({ note, plan }) => {
+        const d = plan.decision;
+        if (d.kind === "existing") {
+          const sec = titleById.get(d.sectionId);
+          return {
+            noteId: note.id,
+            title: note.title,
+            kind: "existing" as const,
+            toSectionId: d.sectionId,
+            toSectionTitle: sec?.title ?? null,
+            toSectionEmoji: sec?.emoji ?? null,
+            newSectionTitle: null,
+            tags: d.tags,
+            confidence: d.confidence,
+          };
+        }
+        if (d.kind === "create") {
+          return {
+            noteId: note.id,
+            title: note.title,
+            kind: "create" as const,
+            toSectionId: null,
+            toSectionTitle: null,
+            toSectionEmoji: d.newSectionEmoji,
+            newSectionTitle: d.newSectionTitle,
+            tags: d.tags,
+            confidence: d.confidence,
+          };
+        }
+        // inbox / low-confidence → leave it where it is (skip by default).
+        return {
+          noteId: note.id,
+          title: note.title,
+          kind: "skip" as const,
+          toSectionId: null,
+          toSectionTitle: null,
+          toSectionEmoji: null,
+          newSectionTitle: null,
+          tags: d.tags,
+          confidence: d.confidence,
+        };
+      });
+
+      const nextCursor =
+        loose.length === input.batchSize ? loose[loose.length - 1]!.id : null;
+
+      return { proposals, nextCursor };
+    }),
+
+  /**
+   * Apply a (possibly user-edited) reorganization plan. Creates new sections
+   * once per normalized title, moves each note under its destination, applies
+   * tags. Per-move isolation; returns the revert delta for undo-all.
+   */
+  applyReorganize: noteMutationProcedure
+    .input(
+      z.object({
+        teamId: z.string().cuid().optional(),
+        moves: z
+          .array(
+            z.object({
+              noteId: z.string().cuid(),
+              toSectionId: z.string().cuid().nullable().optional(),
+              newSectionTitle: z.string().max(60).nullable().optional(),
+              tags: z.array(z.string()).optional(),
+            }),
+          )
+          .min(1)
+          .max(25),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const teamId = await resolveCaptureTeamId(ctx, input.teamId);
+      const applied: {
+        noteId: string;
+        fromParentId: string | null;
+        fromPosition: number;
+        toSectionId: string;
+      }[] = [];
+      const createdSectionIds: string[] = [];
+      const failures: { noteId: string; error: string }[] = [];
+      const createdByTitle = new Map<string, string>();
+
+      for (const m of input.moves) {
+        try {
+          await ctx.prisma.$transaction(async (tx) => {
+            const note = await tx.note.findFirst({
+              where: { id: m.noteId, teamId, deletedAt: null },
+              select: { id: true, parentId: true, position: true },
+            });
+            if (!note) throw new Error("Note not found");
+
+            let sectionId: string;
+            if (m.toSectionId) {
+              const sec = await tx.note.findFirst({
+                where: { id: m.toSectionId, teamId, deletedAt: null },
+                select: { id: true },
+              });
+              if (!sec) throw new Error("Target section not found");
+              sectionId = sec.id;
+            } else if (m.newSectionTitle && m.newSectionTitle.trim()) {
+              const key = normalizeSectionTitle(m.newSectionTitle);
+              const cached = createdByTitle.get(key);
+              if (cached) {
+                sectionId = cached;
+              } else {
+                const resolved = await resolveOrCreateSection(tx, {
+                  userId: ctx.userId,
+                  teamId,
+                  decision: {
+                    kind: "create",
+                    newSectionTitle: m.newSectionTitle.trim(),
+                    newSectionEmoji: null,
+                    noteTitle: "",
+                    emoji: null,
+                    tags: [],
+                    summary: "",
+                    confidence: 1,
+                    lowConfidence: false,
+                  },
+                });
+                sectionId = resolved.sectionId;
+                createdByTitle.set(key, sectionId);
+                if (resolved.createdSectionId)
+                  createdSectionIds.push(resolved.createdSectionId);
+              }
+            } else {
+              throw new Error("No destination for move");
+            }
+
+            if (sectionId === note.id) throw new Error("Cannot self-parent");
+
+            const fromParentId = note.parentId;
+            const fromPosition = note.position;
+
+            await reindexSiblings(tx, teamId, fromParentId, note.id);
+            const others = await tx.note.findMany({
+              where: { teamId, parentId: sectionId, id: { not: note.id } },
+              orderBy: [{ position: "asc" }, { updatedAt: "desc" }],
+              select: { id: true },
+            });
+            const ordered = [note.id, ...others.map((o) => o.id)];
+            await Promise.all(
+              ordered.map((nid, i) =>
+                tx.note.update({
+                  where: { id: nid },
+                  data: {
+                    position: i,
+                    ...(nid === note.id ? { parentId: sectionId } : {}),
+                  },
+                }),
+              ),
+            );
+
+            if (m.tags && m.tags.length) {
+              await tx.note.update({
+                where: { id: note.id },
+                data: {
+                  tags: {
+                    connectOrCreate: m.tags.map((t) => ({
+                      where: { name: t },
+                      create: { name: t },
+                    })),
+                  },
+                },
+              });
+            }
+
+            applied.push({
+              noteId: note.id,
+              fromParentId,
+              fromPosition,
+              toSectionId: sectionId,
+            });
+          });
+        } catch (err) {
+          failures.push({
+            noteId: m.noteId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (applied.length) {
+        emitActivityEvent({
+          type: "note.updated",
+          actorId: ctx.userId,
+          subjectType: "note",
+          subjectId: applied[0]!.noteId,
+          payload: { reorganized: applied.length, createdSectionIds },
+        });
+      }
+
+      return { applied, createdSectionIds, failures };
+    }),
+
+  /**
+   * Undo a batch reorganization: move each note back to its prior parent/
+   * position and delete any sections this run created that are now empty.
+   */
+  undoReorganize: noteMutationProcedure
+    .input(
+      z.object({
+        moves: z
+          .array(
+            z.object({
+              noteId: z.string().cuid(),
+              fromParentId: z.string().cuid().nullable(),
+              fromPosition: z.number().int().min(0),
+            }),
+          )
+          .min(1)
+          .max(50),
+        createdSectionIds: z.array(z.string().cuid()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      for (const m of input.moves) {
+        try {
+          await ctx.prisma.$transaction(async (tx) => {
+            const note = await tx.note.findFirst({
+              where: {
+                id: m.noteId,
+                teamId: { in: ctx.teamspaceIds },
+                deletedAt: null,
+              },
+              select: { id: true, teamId: true, parentId: true },
+            });
+            if (!note || !note.teamId) return;
+
+            let target = m.fromParentId;
+            if (target) {
+              const p = await tx.note.findFirst({
+                where: { id: target, teamId: note.teamId, deletedAt: null },
+                select: { id: true },
+              });
+              if (!p) target = null;
+            }
+
+            await reindexSiblings(tx, note.teamId, note.parentId, note.id);
+            const others = await tx.note.findMany({
+              where: { teamId: note.teamId, parentId: target, id: { not: note.id } },
+              orderBy: [{ position: "asc" }, { updatedAt: "desc" }],
+              select: { id: true },
+            });
+            const idx = Math.min(Math.max(0, m.fromPosition), others.length);
+            const ordered = others.map((o) => o.id);
+            ordered.splice(idx, 0, note.id);
+            await Promise.all(
+              ordered.map((nid, i) =>
+                tx.note.update({
+                  where: { id: nid },
+                  data: {
+                    position: i,
+                    ...(nid === note.id ? { parentId: target } : {}),
+                  },
+                }),
+              ),
+            );
+          });
+        } catch (err) {
+          console.error("[note.undoReorganize] failed for", m.noteId, err);
+        }
+      }
+
+      let removedSections = 0;
+      for (const sid of input.createdSectionIds ?? []) {
+        const sec = await ctx.prisma.note.findFirst({
+          where: {
+            id: sid,
+            teamId: { in: ctx.teamspaceIds },
+            deletedAt: null,
+            isAutoCreated: true,
+          },
+          select: { id: true, teamId: true, parentId: true },
+        });
+        if (!sec || !sec.teamId) continue;
+        const remaining = await ctx.prisma.note.count({
+          where: { parentId: sec.id, deletedAt: null },
+        });
+        if (remaining === 0) {
+          await ctx.prisma.note.update({
+            where: { id: sec.id },
+            data: { deletedAt: new Date() },
+          });
+          await reindexSiblings(ctx.prisma, sec.teamId, sec.parentId);
+          removedSections += 1;
+        }
+      }
+
+      return { ok: true as const, removedSections };
+    }),
 
   update: noteMutationProcedure.input(updateNoteSchema).mutation(async ({ ctx, input }) => {
     const { id, tags, ...data } = input;

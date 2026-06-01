@@ -1,5 +1,8 @@
 import { prisma } from "@omnitool/database";
 import type { Prisma } from "@omnitool/database";
+import { createLogger } from "@/lib/observability/logger";
+
+const log = createLogger("activity");
 
 export type ActivityEventType =
   | "task.created"
@@ -75,10 +78,18 @@ export async function emitActivityEvent(
     });
 
     // Fire-and-forget workflow trigger matching
-    matchAndTriggerWorkflows(params).catch(() => {});
+    matchAndTriggerWorkflows(params).catch((err) => {
+      log.error("Workflow trigger matching failed", err, {
+        eventType: params.type,
+      });
+    });
   } catch (err) {
     // Log but don't crash — event emission is non-critical
-    console.error("[ActivityEvent] Failed to emit:", params.type, err);
+    log.error("Failed to emit activity event", err, {
+      eventType: params.type,
+      subjectType: params.subjectType,
+      subjectId: params.subjectId,
+    });
   }
 }
 
@@ -146,6 +157,12 @@ async function matchAndTriggerWorkflows(
     const { executeWorkflowRun } = await import(
       "@/lib/workflows/engine"
     );
-    executeWorkflowRun(run.id).catch(console.error);
+    executeWorkflowRun(run.id).catch((err) => {
+      log.error("Event-triggered workflow run failed", err, {
+        workflowId: wf.id,
+        runId: run.id,
+        eventType: params.type,
+      });
+    });
   }
 }

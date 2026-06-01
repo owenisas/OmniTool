@@ -7,6 +7,11 @@ datasource db {
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  // Emit OpenTelemetry spans for queries so DB work shows up as child spans
+  // under the request/tRPC trace. Requires `@prisma/instrumentation` registered
+  // in the OTel setup (apps/web/lib/observability/otel.ts). Re-run
+  // `pnpm db:generate` after changing this block.
+  previewFeatures = ["tracing"]
 }
 
 // ─── USERS & AUTH ───────────────────────────────────────────
@@ -172,6 +177,7 @@ model Task {
   creatorId   String
   parentId    String?
   dueDate     DateTime?
+  firstStartedAt DateTime?
   completedAt DateTime?
   position    Int       @default(0)
   createdAt   DateTime  @default(now())
@@ -713,6 +719,17 @@ model UserNotePreference {
   groupBy                String   @default("none")
   /// Last-selected teamspace lens on the /notes page. null = "All teamspaces".
   activeTeamspaceId      String?
+  /// AI auto-sort: per-user "Inbox" section note for low-confidence captures
+  /// (nullable = none yet; lazily created on first low-confidence capture).
+  inboxNoteParentId         String?
+  /// AI auto-sort: when true, large editor pastes prompt to auto-file into a note.
+  autoSortPaste             Boolean  @default(false)
+  /// AI auto-sort: char threshold above which an editor paste is treated "large".
+  autoSortPasteThreshold    Int      @default(280)
+  /// AI auto-sort: keep the pasted text in the current note vs moving it out.
+  autoSortPasteKeepOriginal Boolean  @default(false)
+  /// AI auto-sort: default teamspace for captures (null = active team, then personal).
+  defaultCaptureTeamId      String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 

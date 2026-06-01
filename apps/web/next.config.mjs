@@ -50,6 +50,14 @@ const securityHeaders = [
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Emit browser source maps in production builds so minified client stack
+  // traces are symbolicated and debuggable (and so any later error-tracking
+  // vendor can upload + resolve them). Without this, every prod client error
+  // is unreadable noise. Conservative + reversible: only affects the build's
+  // `.map` emission, not runtime behavior or the CSP/security headers below.
+  // Trade-off is slightly larger build output + build time; acceptable for an
+  // internal app. The maps are served alongside the JS by Next.js.
+  productionBrowserSourceMaps: true,
   // Monorepo: trace from workspace root so Prisma engine binaries are included
   outputFileTracingRoot: resolve(__dirname, "../../"),
   outputFileTracingIncludes: {

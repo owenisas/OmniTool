@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { prisma } from "@omnitool/database";
 import { emitActivityEvent } from "@/lib/activity/emit";
+import {
+  claimWebhookDelivery,
+  linearDeliveryKey,
+  releaseWebhookDelivery,
+} from "@/lib/webhooks/dedup";
+import { enforceWebhookRateLimit } from "@/lib/webhooks/rate-limit";
 
 /**
  * Verify a Linear webhook signature (HMAC-SHA256).
@@ -73,9 +79,21 @@ interface LinearWebhookPayload {
   url?: string;
   createdAt?: string;
   organizationId?: string;
+  // Linear has no single delivery-id header; it includes the webhook's id and
+  // a per-delivery `webhookTimestamp` in the payload, which we combine into a
+  // composite dedup key.
+  webhookId?: string;
+  webhookTimestamp?: number;
 }
 
 export async function POST(req: Request) {
+  // ------------------------------------------------------------------
+  // 0. Per-source rate limit. Clips Linear retry storms / loops before we
+  //    spend CPU on signature verification or DB work. Fails open (no Redis).
+  // ------------------------------------------------------------------
+  const limited = await enforceWebhookRateLimit("linear", req);
+  if (limited) return limited;
+
   // ------------------------------------------------------------------
   // 1. Validate that the webhook secret is configured on the server.
   // ------------------------------------------------------------------
@@ -126,23 +144,51 @@ export async function POST(req: Request) {
     `[Linear Webhook] type=${type} action=${action} id=${data?.id ?? "unknown"}`,
   );
 
+  // ------------------------------------------------------------------
+  // 3a. Idempotency guard. Linear delivers at-least-once and retries on
+  //     non-2xx. It sends no single delivery-id header, so we derive a
+  //     composite key from webhookId + type + action + entity id +
+  //     webhookTimestamp. Distinct logical events (create vs update of the
+  //     same issue) stay separate; retries of the same event collapse.
+  // ------------------------------------------------------------------
+  const deliveryKey = linearDeliveryKey({
+    webhookId: payload.webhookId,
+    type,
+    action,
+    dataId: typeof data?.id === "string" ? data.id : null,
+    webhookTimestamp: payload.webhookTimestamp,
+  });
+  const firstDelivery = await claimWebhookDelivery("linear", deliveryKey);
+  if (!firstDelivery) {
+    console.log(
+      `[Linear Webhook] Duplicate delivery (${deliveryKey}) — already processed, skipping.`,
+    );
+    return NextResponse.json({ received: true, type, action, duplicate: true });
+  }
+
   // Handle Issue + Comment webhooks. Each handler also emits an activity
   // event so workflow templates can trigger off Linear changes.
   // (Phase 1a: subjectType reuses "issue" — no Prisma migration needed.)
-  if (type === "Issue") {
-    try {
+  //
+  // On a transient handler failure we now return non-2xx so Linear retries.
+  // Because we claimed the delivery above, we must first RELEASE that claim,
+  // otherwise the retry (same composite key) would be deduped away and the
+  // event silently dropped. Releasing + 500 = the redelivery re-claims and
+  // re-runs the work that didn't complete (handlers do absolute-state writes
+  // / upserts, so re-running is idempotent).
+  try {
+    if (type === "Issue") {
       await handleIssueWebhook(action, data);
-    } catch (err) {
-      console.error(`[Linear Webhook] Handler error for Issue.${action}:`, err);
-      // Return 200 anyway -- Linear retries on non-2xx and we don't want
-      // repeated retries for a processing bug.
-    }
-  } else if (type === "Comment") {
-    try {
+    } else if (type === "Comment") {
       await handleCommentWebhook(action, data);
-    } catch (err) {
-      console.error(`[Linear Webhook] Handler error for Comment.${action}:`, err);
     }
+  } catch (err) {
+    console.error(`[Linear Webhook] Handler error for ${type}.${action}:`, err);
+    await releaseWebhookDelivery("linear", deliveryKey);
+    return NextResponse.json(
+      { error: "Webhook processing failed" },
+      { status: 500 },
+    );
   }
 
   return NextResponse.json({ received: true, type, action });

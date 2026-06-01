@@ -99,7 +99,7 @@ export function PerformancePageClient() {
       )}
 
       {statsQuery.data && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -152,6 +152,67 @@ export function PerformancePageClient() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Sum of finished entries on tasks in{" "}
                 {selectedProject?.name ?? "this project"}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Cycle time (median)
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold tabular-nums">
+                {statsQuery.data.cycleTimeSampleSize > 0
+                  ? formatDuration(statsQuery.data.medianCycleTime)
+                  : "—"}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {statsQuery.data.cycleTimeSampleSize > 0 ? (
+                  <>
+                    In-progress → done across{" "}
+                    {statsQuery.data.cycleTimeSampleSize} task
+                    {statsQuery.data.cycleTimeSampleSize === 1 ? "" : "s"} (avg{" "}
+                    {formatDuration(statsQuery.data.avgCycleTime)})
+                  </>
+                ) : (
+                  "Move tasks to In Progress to start tracking"
+                )}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Work in progress
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold tabular-nums">
+                {statsQuery.data.currentWip}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                In Progress + In Review right now
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Throughput
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold tabular-nums">
+                {statsQuery.data.throughputPerWeek.toFixed(1)}
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  /wk
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {statsQuery.data.throughputTotal} task
+                {statsQuery.data.throughputTotal === 1 ? "" : "s"} done in the
+                last {statsQuery.data.throughputWeeks} weeks
               </p>
             </CardContent>
           </Card>

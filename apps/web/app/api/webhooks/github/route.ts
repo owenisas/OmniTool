@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import {
+  claimWebhookDelivery,
+  releaseWebhookDelivery,
+} from "@/lib/webhooks/dedup";
+import { enforceWebhookRateLimit } from "@/lib/webhooks/rate-limit";
 
 /**
  * Verify the GitHub webhook signature (HMAC-SHA256).
@@ -33,6 +38,13 @@ function verifyGitHubSignature(
 }
 
 export async function POST(req: Request) {
+  // ------------------------------------------------------------------
+  // 0. Per-source rate limit. Clips retry storms / loops before we spend
+  //    CPU on signature verification or DB work. Fails open (no Redis).
+  // ------------------------------------------------------------------
+  const limited = await enforceWebhookRateLimit("github", req);
+  if (limited) return limited;
+
   // ------------------------------------------------------------------
   // 1. Validate that the webhook secret is configured on the server.
   // ------------------------------------------------------------------
@@ -77,18 +89,48 @@ export async function POST(req: Request) {
 
   console.log(`[GitHub Webhook] event=${event} delivery=${deliveryId}`);
 
+  // ------------------------------------------------------------------
+  // 3a. Idempotency guard. GitHub delivers at-least-once and retries on
+  //     non-2xx, so the same x-github-delivery can arrive multiple times.
+  //     Claim it once; skip processing (but still ack 200) on redelivery.
+  // ------------------------------------------------------------------
+  const firstDelivery = await claimWebhookDelivery("github", deliveryId);
+  if (!firstDelivery) {
+    console.log(
+      `[GitHub Webhook] Duplicate delivery=${deliveryId} (event=${event}) — already processed, skipping.`,
+    );
+    return NextResponse.json({ received: true, event, duplicate: true });
+  }
+
+  // Parse the payload up front. A malformed body is a permanent failure —
+  // retrying won't fix invalid JSON — so we ack 200 to stop GitHub retrying.
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(body) as Record<string, unknown>;
+  } catch (err) {
+    console.error(`[GitHub Webhook] Invalid JSON for ${event}:`, err);
+    return NextResponse.json({ received: true, event, invalid: true });
+  }
+
   // Dynamically import handlers to avoid loading DB clients at module scope
   const { webhookHandlers } = await import("./handlers");
   const handler = webhookHandlers[event];
 
   if (handler) {
     try {
-      const payload = JSON.parse(body) as Record<string, unknown>;
       await handler(payload, { event, deliveryId });
     } catch (err) {
       console.error(`[GitHub Webhook] Handler error for ${event}:`, err);
-      // Return 200 anyway — GitHub retries on non-2xx and we don't want
-      // repeated retries for a processing bug.
+      // Transient processing failure. Now that the dedup guard makes
+      // reprocessing idempotent, return non-2xx so GitHub retries the
+      // delivery. We claimed this delivery above, so RELEASE the claim
+      // first — otherwise the retry (same x-github-delivery) would be
+      // deduped away and the event silently dropped.
+      await releaseWebhookDelivery("github", deliveryId);
+      return NextResponse.json(
+        { error: "Webhook processing failed" },
+        { status: 500 },
+      );
     }
   }
 

@@ -8,6 +8,7 @@ import {
 } from "../init";
 import { createTaskSchema, updateTaskSchema, moveTaskSchema } from "@omnitool/shared/validators";
 import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
+import { shouldStampCycleStart } from "./performance-flow";
 
 export const taskRouter = createTRPCRouter({
   listMineForTeam: teamProtectedProcedure
@@ -140,7 +141,10 @@ export const taskRouter = createTRPCRouter({
       const { id, ...data } = input;
       const existing = await ctx.prisma.task.findUnique({
         where: { id },
-        select: { project: { select: { teamId: true } } },
+        select: {
+          firstStartedAt: true,
+          project: { select: { teamId: true } },
+        },
       });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND" });
@@ -151,10 +155,18 @@ export const taskRouter = createTRPCRouter({
         existing.project.teamId,
       );
 
+      // Stamp cycle-time start on the first transition into IN_PROGRESS.
+      // Idempotent: only set when not already recorded, never overwritten.
+      const startsCycle = shouldStampCycleStart(
+        data.status,
+        existing.firstStartedAt,
+      );
+
       const task = await ctx.prisma.task.update({
         where: { id },
         data: {
           ...data,
+          ...(startsCycle ? { firstStartedAt: new Date() } : {}),
           ...(data.status === "DONE" ? { completedAt: new Date() } : {}),
         },
       });
@@ -183,7 +195,10 @@ export const taskRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.prisma.task.findUnique({
         where: { id: input.id },
-        select: { project: { select: { teamId: true } } },
+        select: {
+          firstStartedAt: true,
+          project: { select: { teamId: true } },
+        },
       });
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND" });
@@ -194,11 +209,19 @@ export const taskRouter = createTRPCRouter({
         existing.project.teamId,
       );
 
+      // Stamp cycle-time start on the first transition into IN_PROGRESS.
+      // Idempotent: only set when not already recorded, never overwritten.
+      const startsCycle = shouldStampCycleStart(
+        input.status,
+        existing.firstStartedAt,
+      );
+
       const task = await ctx.prisma.task.update({
         where: { id: input.id },
         data: {
           status: input.status,
           position: input.position,
+          ...(startsCycle ? { firstStartedAt: new Date() } : {}),
           ...(input.status === "DONE" ? { completedAt: new Date() } : { completedAt: null }),
         },
       });

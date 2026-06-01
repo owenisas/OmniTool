@@ -10,6 +10,7 @@ import { CommandPaletteProvider } from "@/components/command-palette/command-pal
 import { PageTransition } from "@/components/layout/page-transition";
 import { PowerSyncProvider } from "@/components/providers/powersync-provider";
 import { TeamProvider } from "@/components/providers/team-provider";
+import { CaptureDialog } from "@/components/notes/capture/capture-dialog";
 import { prisma } from "@omnitool/database";
 
 async function getInitialTeams(userId: string) {
@@ -62,6 +63,7 @@ export default async function DashboardLayout({
               <Sidebar />
               <div className="flex flex-1 flex-col overflow-hidden">
                 <Topbar />
+                <CaptureDialog />
                 <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
                   <InvitationBanner />
                   <PageTransition>{children}</PageTransition>

@@ -1,5 +1,8 @@
 import { prisma } from "@omnitool/database";
+import { createLogger } from "@/lib/observability/logger";
 import { executeWorkflowRun } from "./engine";
+
+const log = createLogger("workflow:scheduler");
 
 let initialized = false;
 const scheduledJobs: Map<string, ReturnType<typeof setInterval>> =
@@ -23,7 +26,9 @@ export async function initWorkflowScheduler(): Promise<void> {
     where: { status: "running" },
   });
   for (const run of interruptedRuns) {
-    executeWorkflowRun(run.id).catch(console.error);
+    executeWorkflowRun(run.id).catch((err) => {
+      log.error("Resumed workflow run failed", err, { runId: run.id });
+    });
   }
 
   // Load and register scheduled workflows
@@ -38,9 +43,10 @@ export async function initWorkflowScheduler(): Promise<void> {
     }
   }
 
-  console.log(
-    `[WorkflowScheduler] Initialized with ${scheduledWorkflows.length} scheduled workflows, ${interruptedRuns.length} resumed runs`
-  );
+  log.info("Scheduler initialized", {
+    scheduledWorkflows: scheduledWorkflows.length,
+    resumedRuns: interruptedRuns.length,
+  });
 }
 
 /**
@@ -86,12 +92,14 @@ export function registerScheduledWorkflow(
         });
       }
 
-      executeWorkflowRun(run.id).catch(console.error);
+      executeWorkflowRun(run.id).catch((err) => {
+        log.error("Scheduled workflow run failed", err, {
+          workflowId,
+          runId: run.id,
+        });
+      });
     } catch (err) {
-      console.error(
-        `[WorkflowScheduler] Error firing scheduled workflow ${workflowId}:`,
-        err
-      );
+      log.error("Error firing scheduled workflow", err, { workflowId });
     }
   }, intervalMs);
 

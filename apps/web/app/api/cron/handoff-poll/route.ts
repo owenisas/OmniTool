@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@omnitool/database";
-import type { Prisma } from "@omnitool/database";
-import { pollCodexTask } from "@/lib/handoffs/providers/codex";
-import { pollClaudeCodeTask } from "@/lib/handoffs/providers/claude-code";
-import { emitActivityEvent, getProjectTeamId } from "@/lib/activity/emit";
+import { advanceHandoff } from "@/lib/handoffs/advance";
 import { requireCronAuthorization } from "@/lib/cron/auth";
 
 /**
  * Vercel Cron handler: Poll active handoffs for status updates.
  * Schedule: daily on the current Vercel Hobby deployment.
  * Increase this to every 5 minutes only after moving the project to Pro.
+ *
+ * The per-handoff poll + lifecycle transition lives in `advanceHandoff`
+ * (`@/lib/handoffs/advance`), shared with the on-demand re-poll route so both
+ * paths stay in lockstep.
  */
 export async function GET(req: Request) {
   const unauthorized = requireCronAuthorization(req);
@@ -28,72 +29,8 @@ export async function GET(req: Request) {
 
   for (const handoff of activeHandoffs) {
     try {
-      const externalId = handoff.externalRunId!;
-
-      if (handoff.agentProvider === "codex") {
-        const status = await pollCodexTask(externalId);
-
-        if (status.status === "completed") {
-          await prisma.agentHandoff.update({
-            where: { id: handoff.id },
-            data: {
-              status: "AWAITING_REVIEW",
-              completedAt: new Date(),
-              resultSummary: status.result?.summary ?? "Task completed",
-              resultArtifacts: (status.result?.artifacts ?? []) as Prisma.InputJsonValue,
-            },
-          });
-
-          const teamId = await getProjectTeamId(handoff.projectId);
-          emitActivityEvent({
-            type: "handoff.completed",
-            actorId: undefined,
-            actorType: "system",
-            teamId: teamId ?? undefined,
-            projectId: handoff.projectId,
-            subjectType: "handoff",
-            subjectId: handoff.id,
-            payload: {
-              title: handoff.title,
-              provider: handoff.agentProvider,
-            },
-          });
-          updated++;
-        } else if (status.status === "failed") {
-          await prisma.agentHandoff.update({
-            where: { id: handoff.id },
-            data: {
-              status: "REJECTED",
-              resultSummary: status.error ?? "Task failed",
-              completedAt: new Date(),
-            },
-          });
-          updated++;
-        } else if (
-          status.status === "running" &&
-          handoff.status === "SUBMITTED"
-        ) {
-          await prisma.agentHandoff.update({
-            where: { id: handoff.id },
-            data: { status: "IN_PROGRESS" },
-          });
-          updated++;
-        }
-      } else if (handoff.agentProvider === "claude-code") {
-        const status = await pollClaudeCodeTask(externalId);
-        if (status.status === "completed" && status.result) {
-          await prisma.agentHandoff.update({
-            where: { id: handoff.id },
-            data: {
-              status: "AWAITING_REVIEW",
-              completedAt: new Date(),
-              resultSummary: status.result.summary,
-              resultArtifacts: (status.result.artifacts ?? []) as Prisma.InputJsonValue,
-            },
-          });
-          updated++;
-        }
-      }
+      const result = await advanceHandoff(handoff);
+      if (result.changed) updated++;
     } catch (err) {
       console.error(
         `[HandoffPoll] Error polling handoff ${handoff.id}:`,

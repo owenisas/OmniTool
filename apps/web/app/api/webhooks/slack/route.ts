@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { handleSlackMention } from "@/lib/slack/mention-handler";
+import {
+  claimWebhookDelivery,
+  releaseWebhookDelivery,
+} from "@/lib/webhooks/dedup";
+import { enforceWebhookRateLimit } from "@/lib/webhooks/rate-limit";
 
 /**
  * Verify a Slack request signature (HMAC-SHA256).
@@ -54,10 +59,20 @@ export async function POST(req: Request) {
   // ------------------------------------------------------------------
   // 2. Handle URL verification challenge (no signature check needed —
   //    Slack sends this during app setup before signing is configured).
+  //    Intentionally answered BEFORE rate limiting so the one-time setup
+  //    handshake is never throttled.
   // ------------------------------------------------------------------
   if (payload.type === "url_verification") {
     return NextResponse.json({ challenge: payload.challenge });
   }
+
+  // ------------------------------------------------------------------
+  // 2a. Per-source rate limit. Clips Slack retry storms before signature
+  //     verification / handler dispatch. Fails open when no Redis. Placed
+  //     after the url_verification handshake so setup is unaffected.
+  // ------------------------------------------------------------------
+  const limited = await enforceWebhookRateLimit("slack", req);
+  if (limited) return limited;
 
   // ------------------------------------------------------------------
   // 3. Validate that the signing secret is configured on the server.
@@ -102,14 +117,29 @@ export async function POST(req: Request) {
     const event = payload.event as Record<string, unknown> | undefined;
     const eventSubtype = event?.type as string | undefined;
     const slackTeamId = payload.team_id as string | undefined;
+    const eventId = payload.event_id as string | undefined;
 
     console.log(
       `[Slack Webhook] event_callback: ${eventSubtype ?? "unknown"}`,
       {
         team_id: slackTeamId,
-        event_id: payload.event_id,
+        event_id: eventId,
       },
     );
+
+    // ----------------------------------------------------------------
+    // Idempotency guard. Slack delivers at-least-once and retries
+    // (X-Slack-Retry-Num) on non-2xx OR on its 3s timeout — both reuse
+    // the same event_id. Claim it once so a redelivery doesn't fire a
+    // second mention reply. We still ack 200 so Slack stops retrying.
+    // ----------------------------------------------------------------
+    const firstDelivery = await claimWebhookDelivery("slack", eventId);
+    if (!firstDelivery) {
+      console.log(
+        `[Slack Webhook] Duplicate event_id=${eventId} — already processed, skipping.`,
+      );
+      return NextResponse.json({ ok: true, duplicate: true });
+    }
 
     // Dispatch app_mention + DM events to the mention handler.
     // We respond OK fast and run the handler in the background — Slack
@@ -137,16 +167,22 @@ export async function POST(req: Request) {
         subtype !== "message_changed" &&
         !event.bot_id
       ) {
-        // Fire-and-forget; failures are logged but don't bubble back to
-        // Slack (it would retry).
+        // Fire-and-forget: Slack requires an ack within 3 seconds, so the
+        // mention is handled in the background AFTER we respond 200. We
+        // can't surface a non-2xx for work that runs post-ack, so instead
+        // we release the dedup claim on failure — that way the next Slack
+        // retry of this same event_id is NOT deduped away and gets to
+        // reprocess (correct at-least-once retry semantics for the async
+        // path). The dedup guard still collapses *concurrent* redeliveries.
         void handleSlackMention({
           rawText: text,
           channel,
           threadTs,
           slackUserId,
           slackTeamId,
-        }).catch((err) => {
+        }).catch(async (err) => {
           console.error("[slack-mention] handler error:", err);
+          await releaseWebhookDelivery("slack", eventId);
         });
       }
     }
@@ -154,8 +190,10 @@ export async function POST(req: Request) {
     console.log(`[Slack Webhook] Unhandled type: ${eventType ?? "unknown"}`);
   }
 
-  // Always return 200 quickly to avoid Slack's 3-second timeout.
-  // Slack retries on non-2xx responses and we don't want repeated
-  // retries for a processing bug.
+  // Ack 200 quickly to satisfy Slack's 3-second timeout. The mention work
+  // runs in the background; if it fails it releases its dedup claim (above)
+  // so Slack's next retry of the same event_id can reprocess. Everything we
+  // reach here (parse / signature / dispatch scheduling) has already
+  // succeeded, so 200 is correct — there is no swallowed synchronous error.
   return NextResponse.json({ ok: true });
 }

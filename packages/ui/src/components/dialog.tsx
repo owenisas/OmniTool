@@ -49,6 +49,48 @@ const DialogContent = React.forwardRef<
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+/**
+ * Task-aware autofocus helper for `DialogContent`/`SheetContent`'s
+ * `onOpenAutoFocus`.
+ *
+ * The WAI-ARIA dialog pattern says focus should move into the dialog when it
+ * opens — ideally to the first meaningful control (or the Cancel/least
+ * destructive action for confirmation dialogs). The anti-pattern that shows up
+ * across the app is `onOpenAutoFocus={(e) => e.preventDefault()}`, which
+ * suppresses Radix's default focus WITHOUT placing focus anywhere, stranding
+ * the user's focus outside the modal.
+ *
+ * Use this instead when you need to override the default (e.g. to skip a
+ * leading icon button and land on the first text input):
+ *
+ * ```tsx
+ * import { focusFirst } from "@omnitool/ui/components/dialog";
+ *
+ * <DialogContent onOpenAutoFocus={focusFirst('input, textarea, [data-autofocus]')}>
+ * ```
+ *
+ * If you pass no selector it focuses the first naturally-focusable element,
+ * which is what Radix does by default — so only reach for this when you need a
+ * custom target. For destructive confirmations, target the cancel button:
+ * `focusFirst('[data-cancel]')`.
+ *
+ * Falls back to focusing the dialog container itself (so focus is never
+ * stranded) when no match is found.
+ */
+function focusFirst(selector = "[data-autofocus], input, textarea, select, button, [href], [tabindex]:not([tabindex='-1'])") {
+  return (event: Event) => {
+    const container = event.currentTarget as HTMLElement | null;
+    if (!container) return;
+    const target = container.querySelector<HTMLElement>(selector);
+    if (target) {
+      event.preventDefault();
+      target.focus();
+    }
+    // If nothing matched, do NOT preventDefault — let Radix run its own
+    // default focus so focus is never left stranded outside the dialog.
+  };
+}
+
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div className={cn("flex flex-col space-y-1.5 text-center sm:text-left", className)} {...props} />
 );
@@ -94,4 +136,5 @@ export {
   DialogFooter,
   DialogTitle,
   DialogDescription,
+  focusFirst,
 };
