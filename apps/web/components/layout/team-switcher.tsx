@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useTeam } from "@/components/providers/team-provider";
 import { CreateTeamDialog } from "./create-team-dialog";
 import {
@@ -13,23 +13,27 @@ import { cn } from "@/lib/utils";
 import { ChevronsUpDown, Check, Plus } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brand-icons";
 
-// Stable color per team name
-const teamColors = [
-  "bg-blue-600",
-  "bg-emerald-600",
-  "bg-violet-600",
-  "bg-amber-600",
-  "bg-rose-600",
-  "bg-cyan-600",
-  "bg-indigo-600",
-  "bg-pink-600",
-];
+const teamLetterSprite = "/brand/team-letter-sprite.png";
+const teamLetters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-function getTeamColor(name: string) {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++)
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return teamColors[Math.abs(hash) % teamColors.length];
+function getTeamInitial(name: string) {
+  return name
+    .normalize("NFKD")
+    .replace(/[^A-Za-z]/g, "")
+    .charAt(0)
+    .toUpperCase() || "T";
+}
+
+function getTeamLetterMark(name: string) {
+  const initial = getTeamInitial(name);
+  const index = Math.max(teamLetters.indexOf(initial), 0);
+  const col = index % 13;
+  const row = Math.floor(index / 13);
+
+  return {
+    backgroundPosition: `${(col / 12) * 100}% ${row * 100}%`,
+    initial,
+  };
 }
 
 function TeamAvatar({
@@ -39,7 +43,13 @@ function TeamAvatar({
   team: { name: string; avatarUrl: string | null };
   size: "sm" | "md";
 }) {
-  const dim = size === "md" ? "h-7 w-7 text-xs" : "h-6 w-6 text-[10px]";
+  const dim = size === "md" ? "h-7 w-7" : "h-6 w-6";
+  const mark = getTeamLetterMark(team.name);
+  const markStyle = {
+    backgroundImage: `url(${teamLetterSprite})`,
+    backgroundPosition: mark.backgroundPosition,
+  } as CSSProperties;
+
   if (team.avatarUrl) {
     return (
       <img
@@ -49,15 +59,24 @@ function TeamAvatar({
       />
     );
   }
+
   return (
     <div
       className={cn(
-        "flex items-center justify-center rounded-md text-white font-bold shrink-0",
-        getTeamColor(team.name),
+        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm",
+        "dark:border-white/10 dark:bg-neutral-950",
         dim,
       )}
+      aria-label={`${mark.initial} team avatar`}
     >
-      {team.name.charAt(0).toUpperCase()}
+      <span
+        className="block h-[86%] w-[86%] bg-no-repeat"
+        aria-hidden="true"
+        style={{
+          ...markStyle,
+          backgroundSize: "1300% 200%",
+        }}
+      />
     </div>
   );
 }
