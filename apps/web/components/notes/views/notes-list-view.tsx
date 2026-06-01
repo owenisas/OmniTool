@@ -33,7 +33,7 @@ export function NotesListView({ groups }: NotesListViewProps) {
               <li key={note.id}>
                 <Link
                   href={`/notes/${note.id}`}
-                  className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-accent/40"
+                  className="flex min-w-0 items-center gap-3 px-3 py-2 transition-colors hover:bg-accent/40"
                 >
                   <NoteIcon
                     emoji={note.emoji}
@@ -45,7 +45,7 @@ export function NotesListView({ groups }: NotesListViewProps) {
                     {note.title || "Untitled"}
                   </span>
                   {note.tags.length > 0 && (
-                    <div className="hidden flex-wrap gap-1 sm:flex">
+                    <div className="hidden max-w-[40%] shrink-0 flex-wrap gap-1 overflow-hidden sm:flex">
                       {note.tags.slice(0, 3).map((tag) => (
                         <Badge
                           key={tag.id}
@@ -62,7 +62,7 @@ export function NotesListView({ groups }: NotesListViewProps) {
                       ) : null}
                     </div>
                   )}
-                  <span className="shrink-0 text-xs text-muted-foreground">
+                  <span className="hidden shrink-0 whitespace-nowrap text-xs text-muted-foreground sm:inline">
                     {formatDistanceToNow(new Date(note.updatedAt), {
                       addSuffix: true,
                     })}

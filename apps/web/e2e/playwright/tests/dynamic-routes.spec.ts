@@ -21,28 +21,17 @@
  *   trust boundary as the UI button.
  */
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
-
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@omnitool.dev";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin123!";
+import { login } from "./helpers/auth";
 
 const IGNORED_ERROR_PATTERNS = [
   /parentNode/,
+  /Hydration failed because/,
   /Minified React error #418/,
   /Minified React error #310/,
   /Minified React error #419/,
 ];
 function isIgnored(msg: string) {
   return IGNORED_ERROR_PATTERNS.some((re) => re.test(msg));
-}
-
-async function login(page: Page) {
-  await page.goto("/login", { waitUntil: "domcontentloaded" });
-  await page.fill('input[type="email"]', ADMIN_EMAIL);
-  await page.fill('input[type="password"]', ADMIN_PASSWORD);
-  await page.locator('form button[type="submit"]').first().click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
-    timeout: 15_000,
-  });
 }
 
 interface VisitProbes {
@@ -101,7 +90,7 @@ test.describe("dynamic-route smoke", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(5 * 60_000);
 
-  test("note detail (created via tRPC)", async ({ page, request }) => {
+  test("note detail (created via tRPC)", async ({ page }) => {
     await login(page);
     const probes = attachProbes(page);
 
@@ -123,7 +112,9 @@ test.describe("dynamic-route smoke", () => {
         contentText: "",
       },
     };
-    const createResp = await request.post(
+    // Use the page-bound APIRequestContext so the tRPC call carries the same
+    // Supabase cookies as the logged-in browser page.
+    const createResp = await page.request.post(
       "/api/trpc/note.create?batch=1",
       {
         data: { "0": createPayload },
@@ -140,7 +131,23 @@ test.describe("dynamic-route smoke", () => {
       body?.[0]?.result?.data?.json?.id ?? body?.[0]?.result?.data?.id;
     expect(noteId, `note id missing in response: ${JSON.stringify(body)}`).toBeTruthy();
 
-    await visitAndAssert(page, `/notes/${noteId}`, probes);
+    try {
+      await visitAndAssert(page, `/notes/${noteId}`, probes);
+    } finally {
+      const deletePayload = { "0": { json: { id: noteId } } };
+      await page.request
+        .post("/api/trpc/note.delete?batch=1", {
+          data: deletePayload,
+          headers: { "Content-Type": "application/json" },
+        })
+        .catch(() => undefined);
+      await page.request
+        .post("/api/trpc/note.purgeFromTrash?batch=1", {
+          data: deletePayload,
+          headers: { "Content-Type": "application/json" },
+        })
+        .catch(() => undefined);
+    }
   });
 
   test("first existing entity in each dynamic list (best-effort)", async ({

@@ -142,6 +142,7 @@ export const taskRouter = createTRPCRouter({
       const existing = await ctx.prisma.task.findUnique({
         where: { id },
         select: {
+          status: true,
           firstStartedAt: true,
           project: { select: { teamId: true } },
         },
@@ -167,7 +168,15 @@ export const taskRouter = createTRPCRouter({
         data: {
           ...data,
           ...(startsCycle ? { firstStartedAt: new Date() } : {}),
-          ...(data.status === "DONE" ? { completedAt: new Date() } : {}),
+          // Stamp completion only on the transition INTO done, clear it on the
+          // transition OUT. Re-saving an already-done task must not move the
+          // timestamp (it feeds cycle-time / throughput metrics).
+          ...(data.status === "DONE" && existing.status !== "DONE"
+            ? { completedAt: new Date() }
+            : {}),
+          ...(data.status && data.status !== "DONE" && existing.status === "DONE"
+            ? { completedAt: null }
+            : {}),
         },
       });
 
@@ -196,6 +205,7 @@ export const taskRouter = createTRPCRouter({
       const existing = await ctx.prisma.task.findUnique({
         where: { id: input.id },
         select: {
+          status: true,
           firstStartedAt: true,
           project: { select: { teamId: true } },
         },
@@ -222,7 +232,15 @@ export const taskRouter = createTRPCRouter({
           status: input.status,
           position: input.position,
           ...(startsCycle ? { firstStartedAt: new Date() } : {}),
-          ...(input.status === "DONE" ? { completedAt: new Date() } : { completedAt: null }),
+          // Only (re)stamp completion on the actual transition into/out of DONE.
+          // Reordering a card within the Done column must NOT move completedAt —
+          // it feeds cycle-time + throughput metrics.
+          ...(input.status === "DONE" && existing.status !== "DONE"
+            ? { completedAt: new Date() }
+            : {}),
+          ...(input.status !== "DONE" && existing.status === "DONE"
+            ? { completedAt: null }
+            : {}),
         },
       });
 

@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@omnitool/ui/components/card";
+import { OmniToolLogo } from "@/components/icons/brand-icons";
 
 export default function UpdatePasswordPage() {
   const [password, setPassword] = useState("");
@@ -54,6 +55,7 @@ export default function UpdatePasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
+          <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
           <CardTitle className="text-2xl font-bold">Set new password</CardTitle>
           <CardDescription>Choose a strong password for your account</CardDescription>
         </CardHeader>

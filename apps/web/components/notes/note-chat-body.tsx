@@ -25,6 +25,7 @@ interface NoteChatBodyProps {
 export function NoteChatBody({
   noteId,
   onClose,
+  onClearMessages,
   prefillRef,
   trailingHeader,
 }: NoteChatBodyProps) {
@@ -35,6 +36,14 @@ export function NoteChatBody({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMessages([]);
+    setInput("");
+    setError(null);
+    setConversationId(null);
+  }, [noteId]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -89,7 +98,11 @@ export function NoteChatBody({
       const response = await fetch("/api/ai/notes-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: requestMessages, noteId }),
+        body: JSON.stringify({
+          messages: requestMessages,
+          noteId,
+          conversationId: conversationId ?? undefined,
+        }),
       });
 
       if (!response.ok || !response.body) {
@@ -98,8 +111,11 @@ export function NoteChatBody({
           typeof body?.error === "string"
             ? body.error
             : `Request failed with ${response.status}`,
-        );
+          );
       }
+
+      const nextConversationId = response.headers.get("X-Conversation-Id");
+      if (nextConversationId) setConversationId(nextConversationId);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -165,7 +181,11 @@ export function NoteChatBody({
               variant="ghost"
               size="sm"
               className="h-7 w-7 p-0"
-              onClick={() => setMessages([])}
+              onClick={() => {
+                setMessages([]);
+                setConversationId(null);
+                onClearMessages?.();
+              }}
               title="Clear chat"
               aria-label="Clear chat"
             >

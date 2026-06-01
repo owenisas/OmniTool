@@ -42,6 +42,7 @@ apps/desktop/src-tauri/resources/
 
 # serwist service worker build artifacts
 apps/web/public/sw.js
+apps/web/public/sw.js.map
 apps/web/public/serwist-worker-*.js
 
 # misc

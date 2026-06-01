@@ -127,9 +127,16 @@ export function linearDeliveryKey(input: {
   type?: string | null;
   action?: string | null;
   dataId?: string | null;
-  webhookTimestamp?: number | null;
+  /**
+   * The ENTITY's update timestamp (`data.updatedAt`), NOT the per-delivery
+   * `webhookTimestamp`. The entity timestamp is identical across retries of the
+   * same event (so retries dedup) but differs between genuinely distinct
+   * updates of the same entity (so they stay separate). Using webhookTimestamp
+   * here would defeat dedup entirely — it changes on every retry.
+   */
+  updatedAt?: string | null;
 }): string | null {
-  const { webhookId, type, action, dataId, webhookTimestamp } = input;
+  const { webhookId, type, action, dataId, updatedAt } = input;
   // Need at least an entity id + action to form a meaningful key.
   if (!dataId || !action) return null;
   return [
@@ -137,6 +144,6 @@ export function linearDeliveryKey(input: {
     type ?? "notype",
     action,
     dataId,
-    webhookTimestamp ?? "nots",
+    updatedAt ?? "nots",
   ].join(":");
 }

@@ -15,6 +15,7 @@ import {
 } from "@omnitool/ui/components/card";
 import { Separator } from "@omnitool/ui/components/separator";
 import { SocialAuthButtons } from "@/components/auth/social-auth-buttons";
+import { OmniToolLogo } from "@/components/icons/brand-icons";
 
 /**
  * Read URL search params. Wrapped by a Suspense boundary one level up so it
@@ -143,6 +144,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
+          <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
           <CardTitle className="text-2xl font-bold">OmniTool</CardTitle>
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>

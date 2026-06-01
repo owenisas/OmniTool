@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@omnitool/ui/components/card";
+import { OmniToolLogo } from "@/components/icons/brand-icons";
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState("");
@@ -50,6 +51,7 @@ export default function ResetPasswordPage() {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Card className="w-full max-w-md">
           <CardHeader className="space-y-1 text-center">
+            <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
             <CardTitle className="text-2xl font-bold">Check your email</CardTitle>
             <CardDescription>
               If an account exists for <strong>{email}</strong>, we sent a
@@ -72,6 +74,7 @@ export default function ResetPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
+          <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
           <CardTitle className="text-2xl font-bold">Reset password</CardTitle>
           <CardDescription>
             Enter your email and we&apos;ll send you a reset link

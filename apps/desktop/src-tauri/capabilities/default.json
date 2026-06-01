@@ -4,15 +4,13 @@
   "description": "OmniTool desktop capability set.",
   "windows": ["main"],
   "remote": {
-    "urls": [
-      "https://omnitool.reunifylabs.com/*",
-      "http://localhost:19283/*"
-    ]
+    "urls": ["https://omnitool.reunifylabs.com/*", "http://localhost:19283/*"]
   },
   "permissions": [
     "core:default",
     "updater:default",
     "notification:default",
+    "process:default",
     "deep-link:default",
     "clipboard-manager:default",
     "global-shortcut:default",

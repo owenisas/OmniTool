@@ -8,6 +8,7 @@ import { useSidebar } from "./sidebar-context";
 import { Breadcrumbs } from "./breadcrumbs";
 import { BackgroundTasksIndicator } from "./background-tasks-indicator";
 import { useCommandPalette } from "@/components/command-palette/command-palette-provider";
+import { DesktopUpdateButton } from "@/components/desktop/update-checker";
 
 function RunningTimer() {
   const utils = trpc.useUtils();
@@ -20,10 +21,7 @@ function RunningTimer() {
 
   if (!running) return null;
 
-  const label =
-    running.task?.title ??
-    running.description ??
-    "Timer running";
+  const label = running.task?.title ?? running.description ?? "Timer running";
 
   return (
     <div className="hidden max-w-[280px] items-center gap-2 rounded-full border bg-muted/50 px-3 py-1 text-xs md:flex">
@@ -57,9 +55,6 @@ function RunningTimer() {
 
 function CommandPaletteTrigger() {
   const { setOpen } = useCommandPalette();
-  const isMac =
-    typeof navigator !== "undefined" &&
-    /Mac|iPod|iPhone|iPad/.test(navigator.platform);
   return (
     <Button
       type="button"
@@ -72,7 +67,7 @@ function CommandPaletteTrigger() {
       <Search className="h-3.5 w-3.5" />
       <span>Search</span>
       <kbd className="ml-2 rounded border bg-muted/40 px-1 font-mono text-[10px]">
-        {isMac ? "⌘" : "Ctrl"}K
+        Ctrl/⌘K
       </kbd>
     </Button>
   );
@@ -100,6 +95,9 @@ export function Topbar() {
 
       {/* Background tasks running indicator (hidden when no tasks). */}
       <BackgroundTasksIndicator />
+
+      {/* Desktop updater (hidden on web). */}
+      <DesktopUpdateButton />
 
       {/* Command palette trigger */}
       <CommandPaletteTrigger />

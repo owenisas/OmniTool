@@ -13,7 +13,7 @@
  *   GET  /login/oauth/authorize    → instantly redirects to redirect_uri with
  *                                    a pre-canned `code` (no UI, no real auth)
  *   POST /login/oauth/access_token → returns a fixed access_token JSON
- *   GET  /api/user                 → returns the fixed user profile that
+ *   GET  /user or /api/user        → returns the fixed user profile that
  *                                    the callback persists into ConnectedAccount
  *
  * Use:
@@ -32,7 +32,7 @@ export interface OAuthMockOptions {
   code?: string;
   /** Access token returned by the token endpoint. */
   accessToken?: string;
-  /** Fake GitHub user profile returned by /api/user. */
+  /** Fake GitHub user profile returned by /user and /api/user. */
   user?: {
     id: number;
     login: string;
@@ -149,8 +149,11 @@ export function startOAuthMock(opts: OAuthMockOptions): Promise<OAuthMockHandle>
       return;
     }
 
-    // ── GET /api/user ─────────────────────────────────────────────────
-    if (req.method === "GET" && url.pathname === "/api/user") {
+    // ── GET /user ─────────────────────────────────────────────────────
+    if (
+      req.method === "GET" &&
+      (url.pathname === "/user" || url.pathname === "/api/user")
+    ) {
       const auth = req.headers["authorization"];
       if (auth !== `Bearer ${accessToken}` && auth !== `token ${accessToken}`) {
         send(res, 401, { message: "Bad credentials" });

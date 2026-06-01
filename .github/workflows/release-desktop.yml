@@ -51,6 +51,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -86,10 +88,47 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      - name: Build release notes
+        id: release-notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(node <<'NODE'
+          const fs = require("node:fs");
+          const tag = process.env.GITHUB_REF_NAME;
+          const notices = JSON.parse(fs.readFileSync("apps/web/lib/release-notices.json", "utf8"));
+          const notice = notices.find((entry) => entry.tag === tag || `v${entry.version}` === tag);
+
+          if (!notice) {
+            console.log(`Desktop release for ${tag}. Download the installer for your platform below.`);
+            process.exit(0);
+          }
+
+          const highlights = Array.isArray(notice.highlights)
+            ? notice.highlights.map((item) => `- ${item}`).join("\n")
+            : "";
+          const parts = [
+            `# ${notice.title}`,
+            notice.summary,
+            highlights ? `## Highlights\n${highlights}` : "",
+            "Download the installer for your platform below.",
+          ].filter(Boolean);
+
+          console.log(parts.join("\n\n"));
+          NODE
+          )"
+          {
+            echo "body<<EOF"
+            echo "$body"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and release with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT_PUBLIC_APP_VERSION: ${{ github.ref_name }}
+          NEXT_PUBLIC_GITHUB_REPOSITORY: ${{ github.repository }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # macOS notarization (optional — remove if no Apple Developer account)
@@ -102,7 +141,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "OmniTool ${{ github.ref_name }}"
-          releaseBody: "Desktop release for ${{ github.ref_name }}. Download the installer for your platform below."
+          releaseBody: ${{ steps.release-notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           projectPath: apps/desktop

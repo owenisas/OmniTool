@@ -1,15 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="OmniTool Apple touch icon">
-  <rect width="180" height="180" rx="40" fill="#0f172a"/>
-
-  <!-- Orbital ring -->
-  <circle cx="90" cy="90" r="50" fill="none" stroke="#f8fafc" stroke-width="10" stroke-opacity="0.5"/>
-
-  <!-- Diagonal orbital nodes -->
-  <circle cx="55" cy="55" r="12" fill="#f8fafc"/>
-  <circle cx="125" cy="55" r="12" fill="#f8fafc"/>
-  <circle cx="125" cy="125" r="12" fill="#f8fafc"/>
-  <circle cx="55" cy="125" r="12" fill="#f8fafc"/>
-
-  <!-- Center hub -->
-  <circle cx="90" cy="90" r="18" fill="#38bdf8"/>
+  <image href="/apple-touch-icon.png" width="180" height="180" preserveAspectRatio="xMidYMid slice"/>
 </svg>

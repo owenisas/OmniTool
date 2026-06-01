@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}'"
   },
   "devDependencies": {
     "@omnitool/web": "workspace:*",

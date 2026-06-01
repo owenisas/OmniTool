@@ -14,9 +14,12 @@ Five layers of testing, ranked by ROI:
 # Layer 1+2 (unit + harness, fast)
 pnpm --filter @omnitool/web test
 
-# Layer 3+4 (Playwright; needs the sidecar OR `pnpm dev:web` running)
+# Layer 3+4 (Playwright; starts a local Next server on :3000 by default)
 pnpm --filter @omnitool/web test:e2e:install   # one-time browser fetch
 pnpm --filter @omnitool/web test:e2e
+
+# Or point the suite at an already-running desktop sidecar / production build.
+BASE_URL=http://localhost:19283 pnpm --filter @omnitool/web test:e2e
 
 # Layer 5 (macOS deep-links, run while OmniTool is open)
 pnpm ship:desktop

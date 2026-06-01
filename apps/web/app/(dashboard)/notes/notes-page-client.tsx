@@ -21,6 +21,7 @@ import {
   PopoverTrigger,
 } from "@omnitool/ui/components/popover";
 import {
+  AlertCircle,
   BookOpen,
   ChevronRight,
   Clock,
@@ -31,6 +32,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  RefreshCw,
   Sparkles,
   Trash,
   Trash2,
@@ -42,7 +44,6 @@ import { TopbarSlot } from "@/components/layout/topbar-slot";
 import { MoveNoteDialog } from "@/components/notes/move-note-dialog";
 import { NotesViewControls } from "@/components/notes/notes-view-controls";
 import { TeamspaceSwitcher } from "@/components/notes/teamspace-switcher";
-import { RecentCapturesProvider } from "@/components/notes/capture/recent-captures-context";
 import { QuickCaptureBox } from "@/components/notes/capture/quick-capture-box";
 import { RecentCapturesList } from "@/components/notes/capture/recent-captures-list";
 import { ReorganizeDialog } from "@/components/notes/capture/reorganize-dialog";
@@ -411,17 +412,26 @@ export function NotesPageClient() {
   const activeFilter = toNoteFilter(filterState);
 
   const utils = trpc.useUtils();
-  const { data: notes, isLoading } = trpc.note.list.useQuery({
+  const {
+    data: notes,
+    error: listError,
+    isLoading,
+    refetch: refetchNotes,
+  } = trpc.note.list.useQuery({
     search: appliedSearch || undefined,
     tag: appliedTag || undefined,
   });
 
   // Filtered query — only runs when the user has active filter conditions.
-  const { data: filteredNotes, isLoading: isFilteredLoading } =
-    trpc.note.listFiltered.useQuery(
-      { filter: activeFilter!, take: 200 },
-      { enabled: activeFilter !== null },
-    );
+  const {
+    data: filteredNotes,
+    error: filteredError,
+    isLoading: isFilteredLoading,
+    refetch: refetchFilteredNotes,
+  } = trpc.note.listFiltered.useQuery(
+    { filter: activeFilter!, take: 200 },
+    { enabled: activeFilter !== null },
+  );
 
   // Server source of truth for view preferences. localStorage paints first
   // (synchronous read on mount); this query reconciles to the server value.
@@ -542,11 +552,19 @@ export function NotesPageClient() {
 
   const recentNotes = useMemo<ListNote[]>(() => {
     if (!visibleNotes.length) return [];
+    const emptyTitles = new Set<string>();
     return [...visibleNotes]
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
+      .filter((note) => {
+        if (note.contentText?.trim()) return true;
+        const titleKey = (note.title?.trim() || "Untitled").toLocaleLowerCase();
+        if (emptyTitles.has(titleKey)) return false;
+        emptyTitles.add(titleKey);
+        return true;
+      })
       .slice(0, 5);
   }, [visibleNotes]);
 
@@ -599,6 +617,13 @@ export function NotesPageClient() {
     setAppliedTag(tagInput.trim());
   }
 
+  function retryNotes() {
+    void refetchNotes();
+    if (activeFilter) {
+      void refetchFilteredNotes();
+    }
+  }
+
   function quickCreateUntitled() {
     if (createNote.isPending) return;
     setCreatingChildOf("__root__");
@@ -630,17 +655,21 @@ export function NotesPageClient() {
   }
 
   const isFiltering = Boolean(appliedSearch || appliedTag || activeFilter);
+  const notesError = listError ?? (activeFilter ? filteredError : null);
+  const hasNotesError = Boolean(notesError);
   const showEmptyState =
-    !isLoading && notes && notes.length === 0 && !isFiltering;
+    !hasNotesError && !isLoading && notes && notes.length === 0 && !isFiltering;
 
   return (
-    <RecentCapturesProvider>
     <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
       <TopbarSlot target="actions">
         <Button
+          type="button"
           size="sm"
           onClick={quickCreateUntitled}
           disabled={createNote.isPending}
+          aria-label="Create new note"
+          data-testid="new-note-button"
         >
           <FilePlus2 className="mr-1 h-4 w-4" />
           {createNote.isPending ? "Creating…" : "New note"}
@@ -658,22 +687,63 @@ export function NotesPageClient() {
 
         <form onSubmit={applyFilters} className="flex flex-col gap-2">
           <Input
+            aria-label="Search notes"
+            data-testid="notes-search-input"
             placeholder="Search title or body…"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
           />
           <div className="flex gap-2">
             <Input
+              aria-label="Filter notes by tag"
+              data-testid="notes-tag-input"
               placeholder="Tag"
               value={tagInput}
               onChange={(e) => setTagInput(e.target.value)}
               className="flex-1"
             />
-            <Button type="submit" variant="secondary" size="sm">
+            <Button
+              type="submit"
+              variant="secondary"
+              size="sm"
+              data-testid="notes-apply-filter"
+            >
               Apply
             </Button>
           </div>
         </form>
+
+        {hasNotesError && (
+          <div
+            role="alert"
+            data-testid="notes-load-error"
+            className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+          >
+            <div className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <div>
+                  <p className="font-medium text-destructive">
+                    Could not load notes.
+                  </p>
+                  <p className="break-words text-xs text-muted-foreground">
+                    {notesError?.message ?? "Please retry."}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={retryNotes}
+                  className="h-7 px-2 text-xs"
+                >
+                  <RefreshCw className="mr-1 h-3 w-3" />
+                  Retry
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isLoading && (
           <div className="flex justify-center py-8">
@@ -681,9 +751,9 @@ export function NotesPageClient() {
           </div>
         )}
 
-        {!isLoading && <TodayWidget />}
+        {!isLoading && !hasNotesError && <TodayWidget />}
 
-        {!isLoading && recentNotes.length > 0 && (
+        {!isLoading && !hasNotesError && recentNotes.length > 0 && (
           <section className="space-y-1.5">
             <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               <Clock className="h-3 w-3" />
@@ -694,9 +764,9 @@ export function NotesPageClient() {
                 <li key={`recent-${note.id}`}>
                   <Link
                     href={`/notes/${note.id}`}
-                    className="block rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                    className="block min-w-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   >
-                    <span className="truncate">
+                    <span className="block truncate">
                       {note.title || "Untitled"}
                     </span>
                   </Link>
@@ -706,9 +776,9 @@ export function NotesPageClient() {
           </section>
         )}
 
-        {!isLoading && <TeamDailySection />}
+        {!isLoading && !hasNotesError && <TeamDailySection />}
 
-        {!isLoading && (
+        {!isLoading && !hasNotesError && (
           <Link
             href="/notes/trash"
             className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent/60 hover:text-foreground"
@@ -718,14 +788,18 @@ export function NotesPageClient() {
           </Link>
         )}
 
-        {!isLoading && notes && notes.length === 0 && isFiltering && (
+        {!isLoading && !hasNotesError && notes && notes.length === 0 && isFiltering && (
           <p className="text-sm text-muted-foreground">
             No notes match. Try widening your search or create a new page.
           </p>
         )}
 
-        {!isLoading && visibleNotes.length > 0 && (
-          <nav aria-label="Note pages" className="rounded-lg border bg-card p-2">
+        {!isLoading && !hasNotesError && visibleNotes.length > 0 && (
+          <nav
+            aria-label="Note pages"
+            className="rounded-lg border bg-card p-2"
+            data-testid="notes-sidebar-tree"
+          >
             <NoteTreeRows
               grouped={grouped}
               parentId={null}
@@ -747,7 +821,22 @@ export function NotesPageClient() {
         <QuickCaptureBox defaultTeamId={viewPrefs.activeTeamspaceId} />
         <RecentCapturesList />
 
-        {showEmptyState ? (
+        {hasNotesError ? (
+          <div
+            role="alert"
+            className="flex min-h-[40vh] flex-col items-center justify-center rounded-lg border border-destructive/30 bg-destructive/5 p-8 text-center"
+          >
+            <AlertCircle className="mb-3 h-8 w-8 text-destructive" />
+            <h3 className="mb-1 text-lg font-semibold">Notes did not load</h3>
+            <p className="mb-5 max-w-md text-sm text-muted-foreground">
+              {notesError?.message ?? "The notes request failed."}
+            </p>
+            <Button type="button" variant="outline" onClick={retryNotes}>
+              <RefreshCw className="mr-1 h-4 w-4" />
+              Retry
+            </Button>
+          </div>
+        ) : showEmptyState ? (
           <div className="flex min-h-[60vh] flex-col items-center justify-center rounded-lg border bg-card p-8 text-center">
             <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
               <BookOpen className="h-7 w-7" />
@@ -833,6 +922,7 @@ export function NotesPageClient() {
                 <nav
                   aria-label="All note pages"
                   className="rounded-lg border bg-card p-2"
+                  data-testid="notes-main-tree"
                 >
                   <NoteTreeRows
                     grouped={grouped}
@@ -932,6 +1022,5 @@ export function NotesPageClient() {
         teamId={viewPrefs.activeTeamspaceId}
       />
     </div>
-    </RecentCapturesProvider>
   );
 }

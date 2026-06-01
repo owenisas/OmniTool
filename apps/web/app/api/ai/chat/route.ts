@@ -149,11 +149,11 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(
-      { content },
+      { content, conversationId },
       {
-      headers: {
-        "X-Conversation-Id": conversationId,
-      },
+        headers: {
+          "X-Conversation-Id": conversationId,
+        },
       },
     );
   } catch (error) {

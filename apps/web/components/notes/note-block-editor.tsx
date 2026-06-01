@@ -490,7 +490,14 @@ export function NoteBlockEditor({
     const keepOriginal = autoSortRef.current.keepOriginal;
 
     autoFileMutation.mutate(
-      { text: pending.text, sourceNoteId: note.id },
+      // File into the SAME teamspace as the source note — otherwise the capture
+      // (and the removed blocks) would silently relocate to the user's default
+      // teamspace.
+      {
+        text: pending.text,
+        sourceNoteId: note.id,
+        ...(note.teamId ? { teamId: note.teamId } : {}),
+      },
       {
         onSuccess: (result) => {
           if (!keepOriginal && newBlocks.length > 0) {
@@ -543,7 +550,7 @@ export function NoteBlockEditor({
         },
       },
     );
-  }, [editor, note.id, autoFileMutation, scheduleSave, showAutoFile]);
+  }, [editor, note.id, note.teamId, autoFileMutation, scheduleSave, showAutoFile]);
 
   // ─── Orphan-children auto-migration ──────────────────────────────────
   //
@@ -655,6 +662,8 @@ export function NoteBlockEditor({
           disabled={emojiMutation.isPending}
         />
         <Input
+          aria-label="Note title"
+          data-testid="note-title-input"
           value={title}
           onChange={(e) => {
             setTitle(e.target.value);
@@ -694,6 +703,7 @@ export function NoteBlockEditor({
         <span
           className={`ml-auto text-[11px] font-medium ${statusTone}`}
           aria-live="polite"
+          data-testid="note-save-status"
         >
           {statusLabel}
         </span>
@@ -721,7 +731,7 @@ export function NoteBlockEditor({
        * blocks at the end of the document on first open. */}
 
       {/* Editor — borderless prose surface */}
-      <div className="min-h-[480px]">
+      <div className="min-h-[480px]" data-testid="note-editor">
         <BlockNoteView
           editor={editor}
           theme={bnTheme}

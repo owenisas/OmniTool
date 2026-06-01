@@ -14,6 +14,7 @@ import {
 } from "@omnitool/ui/components/card";
 import { Separator } from "@omnitool/ui/components/separator";
 import { SocialAuthButtons } from "@/components/auth/social-auth-buttons";
+import { OmniToolLogo } from "@/components/icons/brand-icons";
 
 export default function SignupPage() {
   const [name, setName] = useState("");
@@ -56,6 +57,7 @@ export default function SignupPage() {
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Card className="w-full max-w-md">
           <CardHeader className="space-y-1 text-center">
+            <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
             <CardTitle className="text-2xl font-bold">Check your email</CardTitle>
             <CardDescription>
               We sent a confirmation link to <strong>{email}</strong>.
@@ -78,6 +80,7 @@ export default function SignupPage() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1 text-center">
+          <OmniToolLogo className="mx-auto mb-3 h-12 w-12" />
           <CardTitle className="text-2xl font-bold">Create account</CardTitle>
           <CardDescription>Get started with OmniTool</CardDescription>
         </CardHeader>

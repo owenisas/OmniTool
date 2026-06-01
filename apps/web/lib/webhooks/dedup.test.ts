@@ -164,16 +164,29 @@ describe("releaseWebhookDelivery", () => {
 });
 
 describe("linearDeliveryKey", () => {
-  it("builds a stable composite key from the parts", async () => {
+  it("builds a stable composite key from the parts (entity updatedAt, NOT per-delivery timestamp)", async () => {
     const { linearDeliveryKey } = await import("./dedup");
     const key = linearDeliveryKey({
       webhookId: "wh1",
       type: "Issue",
       action: "update",
       dataId: "issue-1",
-      webhookTimestamp: 1234,
+      updatedAt: "2026-06-01T00:00:00.000Z",
     });
-    expect(key).toBe("wh1:Issue:update:issue-1:1234");
+    expect(key).toBe("wh1:Issue:update:issue-1:2026-06-01T00:00:00.000Z");
+  });
+
+  it("is stable across retries (same entity updatedAt) but distinct across genuine updates", async () => {
+    const { linearDeliveryKey } = await import("./dedup");
+    const base = { webhookId: "wh1", type: "Issue", action: "update", dataId: "issue-1" };
+    // Same logical event redelivered → identical key (dedups).
+    expect(linearDeliveryKey({ ...base, updatedAt: "t1" })).toBe(
+      linearDeliveryKey({ ...base, updatedAt: "t1" }),
+    );
+    // A genuinely later update of the same issue → different key (not deduped).
+    expect(linearDeliveryKey({ ...base, updatedAt: "t1" })).not.toBe(
+      linearDeliveryKey({ ...base, updatedAt: "t2" }),
+    );
   });
 
   it("returns null when there is no entity id or action", async () => {

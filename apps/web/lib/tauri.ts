@@ -46,14 +46,23 @@ export async function nativeNotify(title: string, body: string): Promise<void> {
  */
 export async function checkForUpdates(): Promise<{
   available: boolean;
+  currentVersion?: string;
   version?: string;
+  date?: string;
+  body?: string;
 } | null> {
   if (!isTauri()) return null;
   try {
     const { check } = await import("@tauri-apps/plugin-updater");
     const update = await check();
     if (update) {
-      return { available: true, version: update.version };
+      return {
+        available: true,
+        currentVersion: update.currentVersion,
+        version: update.version,
+        date: update.date,
+        body: update.body,
+      };
     }
     return { available: false };
   } catch {

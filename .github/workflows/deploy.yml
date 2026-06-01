@@ -41,6 +41,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve app version
+        run: |
+          version="$(git describe --tags --exact-match 2>/dev/null || git describe --tags --always --dirty)"
+          echo "NEXT_PUBLIC_APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_GITHUB_REPOSITORY=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

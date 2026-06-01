@@ -54,7 +54,13 @@ export function useConnectionStatus(): UseConnectionStatus {
         cache: "no-store",
       });
       setStatus(res.ok ? "connected" : "disconnected");
-    } catch {
+    } catch (err) {
+      // A superseded probe (a newer probe or unmount aborted this one) must not
+      // flip the banner to "disconnected" — the newer probe owns the status.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        clearTimeout(timeout);
+        return;
+      }
       setStatus(
         typeof navigator !== "undefined" && !navigator.onLine
           ? "offline"

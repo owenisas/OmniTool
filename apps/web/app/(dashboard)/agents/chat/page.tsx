@@ -15,6 +15,7 @@ export default function AIChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,9 +32,11 @@ export default function AIChatPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [...messages, userMessage],
+          conversationId: conversationId ?? undefined,
         }),
       });
 
+      const nextConversationId = response.headers.get("X-Conversation-Id");
       const data = await response.json();
       if (!response.ok) {
         setMessages((prev) => [
@@ -47,6 +50,11 @@ export default function AIChatPage() {
           },
         ]);
         return;
+      }
+      if (typeof data.conversationId === "string") {
+        setConversationId(data.conversationId);
+      } else if (nextConversationId) {
+        setConversationId(nextConversationId);
       }
       setMessages((prev) => [
         ...prev,

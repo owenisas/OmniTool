@@ -1,0 +1,14 @@
+[
+  {
+    "version": "0.0.1",
+    "tag": "v0.0.1",
+    "date": "2026-06-01",
+    "title": "Desktop release channel",
+    "summary": "OmniTool now treats GitHub version tags as the desktop update channel and surfaces release notices inside the app.",
+    "highlights": [
+      "GitHub tags named v* can publish desktop releases and updater metadata.",
+      "The dashboard and Settings > About page show the latest bundled release notice.",
+      "Desktop update prompts include the target version and a link to the matching GitHub tag."
+    ]
+  }
+]

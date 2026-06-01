@@ -87,48 +87,39 @@ export function LinearIcon({ className }: IconProps) {
   );
 }
 
-/**
- * OmniTool app logo — orbital hub mark.
- * Four satellite nodes on a subtle ring orbit a cyan center hub,
- * representing multiple tools converging into one platform.
- */
-export function OmniToolLogo({ className }: IconProps) {
+function OmniToolGlyph({ className, size }: IconProps & { size: string }) {
   return (
-    <svg
-      className={cn("h-7 w-7", className)}
-      viewBox="0 0 512 512"
+    <span
+      className={cn("relative inline-block overflow-hidden", size, className)}
       role="img"
       aria-label="OmniTool"
     >
-      <rect width="512" height="512" rx="112" fill="#0f172a" />
-      <circle cx="256" cy="256" r="140" fill="none" stroke="#f8fafc" strokeWidth="28" strokeOpacity="0.5" />
-      <circle cx="157" cy="157" r="32" fill="#f8fafc" />
-      <circle cx="355" cy="157" r="32" fill="#f8fafc" />
-      <circle cx="355" cy="355" r="32" fill="#f8fafc" />
-      <circle cx="157" cy="355" r="32" fill="#f8fafc" />
-      <circle cx="256" cy="256" r="52" fill="#38bdf8" />
-    </svg>
+      <span
+        aria-hidden="true"
+        className="block h-full w-full bg-contain bg-center bg-no-repeat dark:hidden"
+        style={{ backgroundImage: "url('/brand/omnitool-logo-light.png')" }}
+      />
+      <span
+        aria-hidden="true"
+        className="hidden h-full w-full bg-contain bg-center bg-no-repeat dark:block"
+        style={{ backgroundImage: "url('/brand/omnitool-logo-dark.png')" }}
+      />
+    </span>
   );
+}
+
+/**
+ * OmniTool app logo — exact 20E/20F triangular workflow mark.
+ * Built from the same source-crop assets as the platform app icons so the in-app chrome,
+ * PWA icons, and desktop bundle share one visual identity.
+ */
+export function OmniToolLogo({ className }: IconProps) {
+  return <OmniToolGlyph className={className} size="h-7 w-7" />;
 }
 
 /**
  * Compact version of OmniTool logo for collapsed sidebar and small contexts.
  */
 export function OmniToolMark({ className }: IconProps) {
-  return (
-    <svg
-      className={cn("h-6 w-6", className)}
-      viewBox="0 0 512 512"
-      role="img"
-      aria-label="OmniTool"
-    >
-      <rect width="512" height="512" rx="112" fill="#0f172a" />
-      <circle cx="256" cy="256" r="140" fill="none" stroke="#f8fafc" strokeWidth="28" strokeOpacity="0.5" />
-      <circle cx="157" cy="157" r="32" fill="#f8fafc" />
-      <circle cx="355" cy="157" r="32" fill="#f8fafc" />
-      <circle cx="355" cy="355" r="32" fill="#f8fafc" />
-      <circle cx="157" cy="355" r="32" fill="#f8fafc" />
-      <circle cx="256" cy="256" r="52" fill="#38bdf8" />
-    </svg>
-  );
+  return <OmniToolGlyph className={className} size="h-6 w-6" />;
 }

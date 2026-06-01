@@ -44,7 +44,7 @@ export function showLocalNotification(
   try {
     const icon =
       typeof window !== "undefined"
-        ? `${window.location.origin}/icon.svg`
+        ? `${window.location.origin}/icon-192.png`
         : undefined;
     new Notification(title, {
       icon,

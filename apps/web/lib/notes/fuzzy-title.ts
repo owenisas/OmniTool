@@ -21,6 +21,12 @@ const GENERIC_TITLES = new Set([
   "other",
   "uncategorized",
   "random",
+  // "inbox" + "ideas" must be rejected too: the prompt forbids them, but a
+  // weak model can still propose them, and a created "Inbox" section would
+  // shadow the canonical Inbox that resolveInboxSection finds by title.
+  "inbox",
+  "ideas",
+  "idea",
 ]);
 
 /**

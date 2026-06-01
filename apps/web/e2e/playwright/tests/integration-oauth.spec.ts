@@ -18,11 +18,10 @@
  *     Playwright is not Tauri, so we navigate to the URL manually
  *     (mirroring what `lib/tauri.ts#startOAuthFlow` does on desktop).
  */
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { startOAuthMock, type OAuthMockHandle } from "../../harness/oauth-mock";
+import { login } from "./helpers/auth";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@omnitool.dev";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin123!";
 const MOCK_PORT = Number(process.env.OAUTH_MOCK_PORT ?? "5556");
 
 let mock: OAuthMockHandle;
@@ -34,16 +33,6 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await mock.close();
 });
-
-async function login(page: Page) {
-  await page.goto("/login", { waitUntil: "domcontentloaded" });
-  await page.fill('input[type="email"]', ADMIN_EMAIL);
-  await page.fill('input[type="password"]', ADMIN_PASSWORD);
-  await page.locator('form button[type="submit"]').first().click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
-    timeout: 15_000,
-  });
-}
 
 test("Connect GitHub via mock provider redirects with code", async ({ page }) => {
   await login(page);
@@ -103,12 +92,14 @@ test("Connect GitHub via mock provider redirects with code", async ({ page }) =>
 
   // Allow up to 5s for the sidecar to fully process the callback.
   for (let i = 0; i < 50; i++) {
-    if (mock.calls.some((c) => c.path === "/api/user")) break;
+    if (mock.calls.some((c) => c.path === "/user" || c.path === "/api/user")) {
+      break;
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
 
   const paths = mock.calls.map((c) => c.path);
   expect(paths).toContain("/login/oauth/authorize");
   expect(paths).toContain("/login/oauth/access_token");
-  expect(paths).toContain("/api/user");
+  expect(paths.some((path) => path === "/user" || path === "/api/user")).toBe(true);
 });

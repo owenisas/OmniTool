@@ -49,17 +49,13 @@ export function useLocalIssue(id: string) {
 // ─── NOTES ──────────────────────────────────────────────────────────────────
 
 export function useLocalNotes(authorId: string, parentId?: string | null) {
-  if (parentId === undefined) {
-    return useQuery(
-      "SELECT * FROM notes WHERE authorId = ? ORDER BY isPinned DESC, updatedAt DESC",
-      [authorId],
-    );
-  }
   return useQuery(
-    parentId === null
+    parentId === undefined
+      ? "SELECT * FROM notes WHERE authorId = ? ORDER BY isPinned DESC, updatedAt DESC"
+      : parentId === null
       ? "SELECT * FROM notes WHERE authorId = ? AND parentId IS NULL ORDER BY position ASC"
       : "SELECT * FROM notes WHERE authorId = ? AND parentId = ? ORDER BY position ASC",
-    parentId === null ? [authorId] : [authorId, parentId],
+    parentId === undefined || parentId === null ? [authorId] : [authorId, parentId],
   );
 }
 
@@ -77,19 +73,13 @@ export function useLocalNoteSearch(authorId: string, query: string) {
 // ─── COMMENTS ───────────────────────────────────────────────────────────────
 
 export function useLocalComments(opts: { taskId?: string; issueId?: string }) {
-  if (opts.taskId) {
-    return useQuery(
-      "SELECT * FROM comments WHERE taskId = ? ORDER BY createdAt ASC",
-      [opts.taskId],
-    );
-  }
-  if (opts.issueId) {
-    return useQuery(
-      "SELECT * FROM comments WHERE issueId = ? ORDER BY createdAt ASC",
-      [opts.issueId],
-    );
-  }
-  return useQuery("SELECT * FROM comments WHERE 1=0", []);
+  const query = opts.taskId
+    ? "SELECT * FROM comments WHERE taskId = ? ORDER BY createdAt ASC"
+    : opts.issueId
+      ? "SELECT * FROM comments WHERE issueId = ? ORDER BY createdAt ASC"
+      : "SELECT * FROM comments WHERE 1=0";
+  const params = opts.taskId ? [opts.taskId] : opts.issueId ? [opts.issueId] : [];
+  return useQuery(query, params);
 }
 
 // ─── TIME ENTRIES ───────────────────────────────────────────────────────────

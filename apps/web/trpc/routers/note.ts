@@ -1151,6 +1151,15 @@ export const noteRouter = createTRPCRouter({
             }
 
             if (sectionId === note.id) throw new Error("Cannot self-parent");
+            // Prevent cycles: the destination section must not be a descendant
+            // of the note being moved (mirrors note.move's guard). `moves` is
+            // client-controlled, so this is a real integrity check.
+            if (
+              sectionId !== note.parentId &&
+              (await isAncestorOf(tx, note.id, sectionId))
+            ) {
+              throw new Error("Invalid parent (cycle)");
+            }
 
             const fromParentId = note.parentId;
             const fromPosition = note.position;

@@ -11,6 +11,7 @@ import { PageTransition } from "@/components/layout/page-transition";
 import { PowerSyncProvider } from "@/components/providers/powersync-provider";
 import { TeamProvider } from "@/components/providers/team-provider";
 import { CaptureDialog } from "@/components/notes/capture/capture-dialog";
+import { RecentCapturesProvider } from "@/components/notes/capture/recent-captures-context";
 import { ConnectionStatusBanner } from "@/components/layout/connection-status-banner";
 import { prisma } from "@omnitool/database";
 
@@ -60,20 +61,22 @@ export default async function DashboardLayout({
       <PowerSyncProvider>
         <SidebarProvider>
           <CommandPaletteProvider>
-            <div className="flex h-screen overflow-hidden">
-              <Sidebar />
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <Topbar />
-                <ConnectionStatusBanner />
-                <CaptureDialog />
-                <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
-                  <InvitationBanner />
-                  <PageTransition>{children}</PageTransition>
-                </main>
+            <RecentCapturesProvider>
+              <div className="flex h-screen overflow-hidden">
+                <Sidebar />
+                <div className="flex flex-1 flex-col overflow-hidden">
+                  <Topbar />
+                  <ConnectionStatusBanner />
+                  <CaptureDialog />
+                  <main className="flex-1 overflow-y-auto p-4 pb-20 md:p-6 md:pb-6">
+                    <InvitationBanner />
+                    <PageTransition>{children}</PageTransition>
+                  </main>
+                </div>
+                <MobileNav />
+                <MobileDrawer />
               </div>
-              <MobileNav />
-              <MobileDrawer />
-            </div>
+            </RecentCapturesProvider>
           </CommandPaletteProvider>
         </SidebarProvider>
       </PowerSyncProvider>

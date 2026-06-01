@@ -147,16 +147,22 @@ export async function POST(req: Request) {
   // ------------------------------------------------------------------
   // 3a. Idempotency guard. Linear delivers at-least-once and retries on
   //     non-2xx. It sends no single delivery-id header, so we derive a
-  //     composite key from webhookId + type + action + entity id +
-  //     webhookTimestamp. Distinct logical events (create vs update of the
-  //     same issue) stay separate; retries of the same event collapse.
+  //     composite key from webhookId + type + action + entity id + the
+  //     ENTITY's updatedAt. The entity timestamp is stable across retries of
+  //     the same event (so retries collapse) but differs between distinct
+  //     updates (so they stay separate). NOTE: we deliberately do NOT use
+  //     payload.webhookTimestamp — that changes on every retry and would defeat
+  //     dedup entirely.
   // ------------------------------------------------------------------
   const deliveryKey = linearDeliveryKey({
     webhookId: payload.webhookId,
     type,
     action,
     dataId: typeof data?.id === "string" ? data.id : null,
-    webhookTimestamp: payload.webhookTimestamp,
+    updatedAt:
+      data && typeof (data as { updatedAt?: unknown }).updatedAt === "string"
+        ? (data as { updatedAt: string }).updatedAt
+        : null,
   });
   const firstDelivery = await claimWebhookDelivery("linear", deliveryKey);
   if (!firstDelivery) {

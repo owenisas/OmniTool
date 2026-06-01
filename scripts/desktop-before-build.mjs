@@ -16,9 +16,14 @@ process.chdir(root);
 const DESKTOP_PORT = 19283;
 const resourceDir = path.join(root, "apps/desktop/src-tauri/resources/server");
 const appShellDir = path.join(root, "apps/desktop/app-shell");
+const webNextDir = path.join(root, "apps/web/.next");
 
 // ── Step 1: Build Next.js standalone ────────────────────────────────────────
 console.log("[desktop-build] Building Next.js standalone server...");
+// The desktop build can run after a normal web build in the same Turbo graph.
+// Clean generated Next types/output first so the standalone pass cannot read
+// stale .next/type roots from a prior build mode.
+fs.rmSync(webNextDir, { recursive: true, force: true });
 execSync("pnpm --filter @omnitool/web build", {
   stdio: "inherit",
   env: { ...process.env, NEXT_OUTPUT: "standalone" },
@@ -38,25 +43,36 @@ const staticDir = path.join(root, "apps/web/.next/static");
 const publicDir = path.join(root, "apps/web/public");
 
 if (!fs.existsSync(standaloneDir)) {
-  console.error("[desktop-build] ERROR: standalone output not found at", standaloneDir);
-  console.error("  Make sure NEXT_OUTPUT=standalone is effective in next.config.mjs");
+  console.error(
+    "[desktop-build] ERROR: standalone output not found at",
+    standaloneDir,
+  );
+  console.error(
+    "  Make sure NEXT_OUTPUT=standalone is effective in next.config.mjs",
+  );
   process.exit(1);
 }
 
 // Copy standalone output with symlinks dereferenced. Tauri's bundler strips
 // symlinks from resources, so we must resolve them ourselves.
 // rsync --copy-links dereferences symlinks while preserving directory structure.
-execSync(`rsync -a --copy-links "${standaloneDir}/" "${resourceDir}/"`, { stdio: "inherit" });
+execSync(`rsync -a --copy-links "${standaloneDir}/" "${resourceDir}/"`, {
+  stdio: "inherit",
+});
 
 // Copy static assets into the correct location
 const destStatic = path.join(resourceDir, "apps/web/.next/static");
 fs.mkdirSync(path.dirname(destStatic), { recursive: true });
-execSync(`rsync -a --copy-links "${staticDir}/" "${destStatic}/"`, { stdio: "inherit" });
+execSync(`rsync -a --copy-links "${staticDir}/" "${destStatic}/"`, {
+  stdio: "inherit",
+});
 
 // Copy public assets
 const destPublic = path.join(resourceDir, "apps/web/public");
 fs.mkdirSync(path.dirname(destPublic), { recursive: true });
-execSync(`rsync -a --copy-links "${publicDir}/" "${destPublic}/"`, { stdio: "inherit" });
+execSync(`rsync -a --copy-links "${publicDir}/" "${destPublic}/"`, {
+  stdio: "inherit",
+});
 
 // ── Step 2b: Fix pnpm module resolution for bundled environment ─────────────
 // pnpm relies on symlinks for dependency resolution. Since Tauri strips symlinks,
@@ -86,7 +102,9 @@ const envFiles = [
 for (const envFile of envFiles) {
   if (fs.existsSync(envFile)) {
     fs.rmSync(envFile);
-    console.log(`[desktop-build] Removed ${path.relative(resourceDir, envFile)}`);
+    console.log(
+      `[desktop-build] Removed ${path.relative(resourceDir, envFile)}`,
+    );
   }
 }
 
@@ -126,7 +144,10 @@ const existingBins = fs.existsSync(binDir)
 
 if (existingBins.length === 0) {
   console.log("[desktop-build] Downloading Node.js binary for sidecar...");
-  execSync("node scripts/download-node-binary.mjs", { stdio: "inherit", cwd: root });
+  execSync("node scripts/download-node-binary.mjs", {
+    stdio: "inherit",
+    cwd: root,
+  });
 } else {
   console.log(`[desktop-build] Node.js binary found: ${existingBins[0]}`);
 }
@@ -134,9 +155,13 @@ if (existingBins.length === 0) {
 // ── Step 4: Generate splash screen ──────────────────────────────────────────
 console.log("[desktop-build] Generating splash screen...");
 fs.mkdirSync(appShellDir, { recursive: true });
+fs.copyFileSync(
+  path.join(publicDir, "brand/omnitool-logo-dark.png"),
+  path.join(appShellDir, "omnitool-logo-dark.png"),
+);
 fs.writeFileSync(
   path.join(appShellDir, "index.html"),
-  generateSplashHtml(DESKTOP_PORT)
+  generateSplashHtml(DESKTOP_PORT),
 );
 
 console.log("[desktop-build] Done.");
@@ -208,7 +233,9 @@ function nodeTargetTriple() {
   };
   const t = map[key];
   if (!t) {
-    console.error(`[desktop-build] Unsupported platform for sidecar wrap: ${key}`);
+    console.error(
+      `[desktop-build] Unsupported platform for sidecar wrap: ${key}`,
+    );
     process.exit(1);
   }
   return t;
@@ -276,7 +303,9 @@ function hoistPnpmDeps(serverDir) {
             if (fs.existsSync(scopeTarget)) continue;
             const scopeSrc = path.join(srcPath, scopeEntry.name);
             if (scopeEntry.isDirectory()) {
-              execSync(`cp -R "${scopeSrc}" "${scopeTarget}"`, { stdio: "pipe" });
+              execSync(`cp -R "${scopeSrc}" "${scopeTarget}"`, {
+                stdio: "pipe",
+              });
             }
           }
         } else if (pkg.isDirectory()) {
@@ -356,9 +385,21 @@ function generateSplashHtml(port) {
       gap: 24px;
     }
     .logo {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-mark {
+      width: 96px;
+      height: 96px;
+      object-fit: contain;
+      border-radius: 18px;
+    }
+    .logo-text {
       font-size: 28px;
       font-weight: 700;
-      letter-spacing: -0.02em;
+      letter-spacing: 0;
       color: #fff;
     }
     .spinner {
@@ -395,12 +436,18 @@ function generateSplashHtml(port) {
 </head>
 <body>
   <div class="splash" id="splash">
-    <div class="logo">OmniTool</div>
+    <div class="logo" aria-label="OmniTool">
+      <img class="brand-mark" src="./omnitool-logo-dark.png" alt="" />
+      <div class="logo-text">OmniTool</div>
+    </div>
     <div class="spinner" id="spinner"></div>
     <div class="status" id="status">Starting server&hellip;</div>
   </div>
   <div class="error" id="error">
-    <div class="logo">OmniTool</div>
+    <div class="logo" aria-label="OmniTool">
+      <img class="brand-mark" src="./omnitool-logo-dark.png" alt="" />
+      <div class="logo-text">OmniTool</div>
+    </div>
     <p>Server failed to start.</p>
     <button class="retry-btn" id="retryBtn">Try Again</button>
   </div>

@@ -10,6 +10,7 @@
  * env-var pages, broken tRPC procedures.
  */
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
+import { login } from "./helpers/auth";
 
 const ROUTES = [
   "/",
@@ -40,19 +41,6 @@ const ROUTES = [
   "/settings/notes",
   "/settings/coding-sessions",
 ];
-
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@omnitool.dev";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin123!";
-
-async function login(page: Page) {
-  await page.goto("/login", { waitUntil: "domcontentloaded" });
-  await page.fill('input[type="email"]', ADMIN_EMAIL);
-  await page.fill('input[type="password"]', ADMIN_PASSWORD);
-  await page.locator('form button[type="submit"]').first().click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
-    timeout: 15_000,
-  });
-}
 
 test.describe("dashboard route smoke", () => {
   test.describe.configure({ mode: "serial" });
@@ -85,6 +73,7 @@ test.describe("dashboard route smoke", () => {
     // (broken hydration, blank pages), tighten the filter.
     const IGNORED_ERROR_PATTERNS = [
       /parentNode/, // flaky DOM cleanup on rapid nav
+      /Hydration failed because/, // dev-mode form of React hydration mismatch
       /Minified React error #418/, // hydration mismatch — recovers
       /Minified React error #310/, // setState in render — recovers
       /Minified React error #419/, // suspense hydration — recovers
