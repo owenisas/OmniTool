@@ -1,18 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("ai", () => ({ generateObject: vi.fn() }));
+vi.mock("ai", () => ({ generateObject: vi.fn(), generateText: vi.fn() }));
 vi.mock("./language-model", () => ({ getOmniLanguageModel: vi.fn() }));
 
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { getOmniLanguageModel } from "./language-model";
 import {
   classifyForAutoFile,
+  coerceClassification,
   decideAutoFilePlacement,
   normalizeTags,
   type AutoFileClassification,
 } from "./auto-file";
 
 const mockGenerateObject = vi.mocked(generateObject);
+const mockGenerateText = vi.mocked(generateText);
 const mockGetModel = vi.mocked(getOmniLanguageModel);
 
 const base: AutoFileClassification = {
@@ -62,13 +64,22 @@ describe("decideAutoFilePlacement", () => {
     expect(d.kind).toBe("inbox");
   });
 
-  it("routes low-confidence captures to Inbox even with a valid match", () => {
+  it("honors a valid match even at low confidence (flags it for review, not Inbox)", () => {
     const d = decideAutoFilePlacement(
       { ...base, matchedSectionId: "sec-1", confidence: 0.3 },
       candidateIds,
       existing,
     );
-    expect(d).toMatchObject({ kind: "inbox", lowConfidence: true });
+    expect(d).toMatchObject({ kind: "existing", sectionId: "sec-1", lowConfidence: true });
+  });
+
+  it("routes a LOW-confidence NEW-section proposal to Inbox (avoids speculative sections)", () => {
+    const d = decideAutoFilePlacement(
+      { ...base, newSection: { title: "Woodworking", emoji: null }, confidence: 0.3 },
+      candidateIds,
+      existing,
+    );
+    expect(d.kind).toBe("inbox");
   });
 
   it("creates a new section when nothing matches", () => {
@@ -130,5 +141,47 @@ describe("classifyForAutoFile", () => {
     mockGenerateObject.mockRejectedValue(new Error("boom"));
     const r = await classifyForAutoFile({ content: "x", candidateSections: [] });
     expect(r).toEqual({ ok: false, reason: "error" });
+  });
+
+  it("uses generateText + JSON parse for NIM/gemma (not generateObject)", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockGetModel.mockReturnValue({ provider: "nvidia-nim", model: {} as any } as any);
+    mockGenerateText.mockResolvedValue({
+      text:
+        'Here you go:\n```json\n{"matchedSectionId":"sec-1","newSection":null,"noteTitle":"Site SEO","emoji":null,"tags":["seo"],"summary":"s","confidence":0.8}\n```',
+    } as any);
+    const r = await classifyForAutoFile({
+      content: "website seo improvements",
+      candidateSections: [{ id: "sec-1", title: "Official-Website" }],
+    });
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+    expect(r).toEqual({
+      ok: true,
+      classification: expect.objectContaining({ matchedSectionId: "sec-1", confidence: 0.8 }),
+    });
+  });
+
+  it("returns error when NIM output has no parseable JSON", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockGetModel.mockReturnValue({ provider: "nvidia-nim", model: {} as any } as any);
+    mockGenerateText.mockResolvedValue({ text: "I cannot help with that." } as any);
+    const r = await classifyForAutoFile({ content: "x", candidateSections: [] });
+    expect(r).toEqual({ ok: false, reason: "error" });
+  });
+});
+
+describe("coerceClassification", () => {
+  it("fills defaults and clamps loose model output", () => {
+    const c = coerceClassification({
+      matchedSectionId: "  sec-9  ",
+      noteTitle: "  Hello  ",
+      confidence: "1.4",
+      tags: ["a", 3, "b"],
+    });
+    expect(c).toMatchObject({ matchedSectionId: "sec-9", noteTitle: "Hello", confidence: 1, tags: ["a", "b"] });
+  });
+  it("rejects objects without a title", () => {
+    expect(coerceClassification({ confidence: 0.9 })).toBeNull();
+    expect(coerceClassification(null)).toBeNull();
   });
 });

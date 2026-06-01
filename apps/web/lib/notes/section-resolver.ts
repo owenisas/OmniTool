@@ -54,6 +54,23 @@ export async function resolveInboxSection(
     }
   }
 
+  // Pointer missing/stale (e.g. a different teamspace, or it was never set) —
+  // reuse an existing "Inbox" section in this teamspace before creating one, so
+  // we never end up with duplicate Inboxes.
+  const byTitle = await tx.note.findFirst({
+    where: { teamId, parentId: null, deletedAt: null, title: INBOX_TITLE },
+    select: { id: true, title: true },
+    orderBy: { createdAt: "asc" },
+  });
+  if (byTitle) {
+    await tx.userNotePreference.upsert({
+      where: { userId },
+      create: { userId, inboxNoteParentId: byTitle.id },
+      update: { inboxNoteParentId: byTitle.id },
+    });
+    return { sectionId: byTitle.id, createdSectionId: null, sectionTitle: byTitle.title };
+  }
+
   const inbox = await tx.note.create({
     data: {
       title: INBOX_TITLE,
